@@ -1,8 +1,12 @@
+"""
+Wrapper script to run test.py entirely in WSL
+This avoids Windows Python dependency issues
+"""
 import subprocess
 import sys
 
 # Build command
-bash_cmd = "cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && .venv_wsl/bin/python Staircase13.py"
+bash_cmd = "cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && .venv_wsl/bin/python base.py"
 
 # Add any command line arguments
 if len(sys.argv) > 1:

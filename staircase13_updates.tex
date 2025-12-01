@@ -1,0 +1,80 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese]{babel}
+\usepackage{amsmath, amssymb}
+\usepackage{geometry}
+\geometry{a4paper, margin=2.5cm}
+
+\title{Cập nhật mã hoá SAT \texttt{Staircase13.py} so với \texttt{base.py}}
+\author{Phong}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Mục tiêu}
+Phiên bản \texttt{Staircase13.py} thay thế mã hoá CNF cũ trong \texttt{base.py} nhằm giảm số mệnh đề ALO/AMO cho \textbf{gán máy} và \textbf{thời điểm khởi động}, đồng thời thu gọn ràng buộc \emph{tiên quyết} trong cùng máy. Các phần còn lại (cắt đỉnh công suất, ràng buộc tài nguyên, không chồng lấn, v.v.) được giữ nguyên.
+
+\section*{Biến mới và quản lý chỉ số}
+\begin{itemize}
+  \item \textbf{Bản đồ biến} $var\_map$: sinh chỉ số nguyên động qua các hàm \texttt{get\_var}/\texttt{set\_var}, cho phép chèn biến phụ khi xây dựng công thức mà không cần đặt trước.
+  \item Biến gốc giữ nguyên: $X_{j,k}$, $S_{j,t}$, $A_{j,t}$, $R_{k,r}$.
+  \item \textbf{Biến phụ Staircase} cho gán máy: $Y_{j,k}$ với $k=0,\ldots,m-2$.
+  \item \textbf{Biến phụ Staircase} cho thời điểm bắt đầu: $T_{j,t}$ với $t=0,\ldots,H-t_j$ và $H=c\cdot r_{\max}$.
+\end{itemize}
+
+\section*{Mã hoá Staircase cho ``một máy duy nhất'' (thay C1+C2)}
+Với mỗi tác vụ $j$:
+\begin{align}
+Y_{j,0} &\leftrightarrow X_{j,0},\\
+(\lnot Y_{j,k-1} \lor Y_{j,k}) & & 1\le k\le m-2,\\
+(\lnot X_{j,k} \lor Y_{j,k}) & & 1\le k\le m-2,\\
+(\lnot X_{j,k} \lor \lnot Y_{j,k-1}) & & 1\le k\le m-2,\\
+(X_{j,k} \lor Y_{j,k-1} \lor \lnot Y_{j,k}) & & 1\le k\le m-2,\\
+Y_{j,m-2} &\oplus X_{j,m-1}. 
+\end{align}
+Chuỗi $Y$ đóng vai trò ``điểm gãy'' duy nhất: $Y_{j,k}=1$ khi đã chọn một máy $\le k$. Mệnh đề XOR cuối đảm bảo hoặc một máy trước $m{-}1$ được chọn, hoặc chính máy $m{-}1$ được chọn, nhờ đó đạt ALO+AMO với $O(m)$ mệnh đề thay vì $O(m^2)$.
+
+\section*{Mã hoá Staircase cho ``một thời điểm khởi động'' (thay C3+C4)}
+Ký hiệu $last_j = H - t_j$ là thời điểm khởi động muộn nhất.
+\begin{itemize}
+  \item Nếu $last_j=0$: buộc $S_{j,0}=1$ (chỉ có một cửa sổ khả dĩ).
+  \item Nếu $last_j>0$, với mọi $t=1,\ldots,last_j-1$:
+  \begin{align}
+  T_{j,0} &\leftrightarrow S_{j,0},\\
+  (\lnot T_{j,t-1} \lor T_{j,t}),\\
+  (\lnot S_{j,t} \lor T_{j,t}),\\
+  (\lnot S_{j,t} \lor \lnot T_{j,t-1}),\\
+  (S_{j,t} \lor T_{j,t-1} \lor \lnot T_{j,t}),\\
+  (T_{j,last_j-1} \oplus S_{j,last_j}). 
+  \end{align}
+\end{itemize}
+Diễn giải: $T_{j,t}$ bật tại \emph{duy nhất} thời điểm khởi động đã chọn và duy trì bằng chuỗi bậc thang; XOR ở biên trên ép tồn tại đúng một $S_{j,t}$ mà không cần liệt kê cặp $t_1<t_2$. Độ phức tạp giảm từ $O(H^2)$ xuống $O(H)$ cho mỗi tác vụ.
+
+\section*{Tiên quyết $i\prec j$ trên cùng máy (thay C7+C8)}
+Sử dụng $T_{j,t}$ để cắt bỏ liệt kê mọi cặp $(t_1,t_2)$:
+\begin{align}
+&(\lnot X_{i,k} \lor \lnot X_{j,k} \lor \lnot T_{j,t_i-1}), & t_i = t_i^{\text{len}} \label{eq:pre1}\\
+&(\lnot X_{i,k} \lor \lnot X_{j,k} \lor \lnot T_{j,t} \lor \lnot S_{i,t - t_i^{\text{len}} + 1}), & t=t_i^{\text{len}},\ldots,H-t_j-1 \label{eq:pre2}\\
+&(\lnot X_{i,k} \lor \lnot X_{j,k} \lor \lnot S_{i,t} \lor \lnot T_{j,H-t_j-1}), & t\ge H-t_j-t_i^{\text{len}}+1. \label{eq:pre3}
+\end{align}
+Trong đó $t_i^{\text{len}}=t_i$ là độ dài tác vụ $i$ và $H=c\cdot r_{\max}$. 
+\eqref{eq:pre2} đảm bảo nếu $i$ bắt đầu tại $t - t_i +1$ thì $j$ không được ``khởi động không trễ hơn'' $t$, tức $start_j \ge start_i + t_i$. 
+Biên muộn \eqref{eq:pre3} loại bỏ các khởi động của $i$ khiến $j$ không còn cửa sổ hợp lệ trong $[0,H)$. Tổng số mệnh đề hạ từ $O(|P|\cdot m \cdot H^2)$ xuống $O(|P|\cdot m \cdot H)$.
+
+\section*{Phần giữ nguyên}
+\begin{itemize}
+  \item (C5) Liên kết $S\rightarrow A$ cho đủ $t_j$ bước.
+  \item (C6) Không chồng lấn trên cùng máy: $X_i\land X_j \Rightarrow \lnot(A_i \land A_j)$ tại mọi $t$.
+  \item (C9)--(C11) Ràng buộc chuỗi tài nguyên, cửa sổ--tài nguyên và ngân sách $R_{\max}$ (PBEnc binmerge).
+  \item Thuật toán cắt đỉnh lặp/hoặc PB cho tối ưu hoá đỉnh công suất không đổi.
+\end{itemize}
+
+\section*{Ý nghĩa thực nghiệm}
+Hai mã hoá Staircase giúp:
+\begin{itemize}
+  \item Giảm mạnh số mệnh đề nền, đặc biệt khi $m$ hoặc $H=c\cdot r_{\max}$ lớn.
+  \item Cải thiện khả năng mở rộng của solver ở bước khả thi ban đầu, từ đó rút ngắn chu trình cắt đỉnh lặp.
+\end{itemize}
+
+\end{document}
