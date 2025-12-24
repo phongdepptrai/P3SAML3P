@@ -2,8 +2,8 @@
 Validate schedules produced by test.py HTML output files.
 
 Usage:
+    python validate_schedule.py  # interactive: pick solver -> choose run-all or single -> pick instance if needed
     python validate_schedule.py Output/Staircase13/MERTENS_n7_m6_c6/r3_R6/MERTENS_n7_m6_c6_r3_R6.html
-    python validate_schedule.py --auto
 
 Checks:
     - Each task has a machine and start within horizon.
@@ -23,26 +23,30 @@ from pathlib import Path
 from typing import List, Tuple
 
 
-def find_html_outputs() -> List[Path]:
-    """
-    Find schedule HTML files under Output/{solver} (or legacy Output_*) excluding summary tables.
-    """
-    candidates: set[Path] = set()
-    search_roots: List[Path] = []
+def find_solver_dirs() -> List[Path]:
+    """Return available solver output folders under Output/ (or legacy Output_*)."""
+    solver_dirs: set[Path] = set()
 
     output_root = Path("Output")
     if output_root.exists():
-        search_roots.extend([p for p in output_root.iterdir() if p.is_dir()])
+        for child in output_root.iterdir():
+            if child.is_dir():
+                solver_dirs.add(child)
 
     for legacy in Path(".").glob("Output_*"):
         if legacy.is_dir():
-            search_roots.append(legacy)
+            solver_dirs.add(legacy)
 
-    for root in search_roots:
-        for html_file in root.rglob("*.html"):
-            if "summary" in html_file.name.lower():
-                continue
-            candidates.add(html_file)
+    return sorted(solver_dirs)
+
+
+def find_html_outputs_for_solver(solver_dir: Path) -> List[Path]:
+    """Find schedule HTML files for a given solver directory, excluding summary tables."""
+    candidates: List[Path] = []
+    for html_file in solver_dir.rglob("*.html"):
+        if "summary" in html_file.name.lower():
+            continue
+        candidates.append(html_file)
     return sorted(candidates)
 
 
@@ -61,6 +65,36 @@ def prompt_choose(options: List[Path]) -> Path:
     if idx < 1 or idx > len(options):
         raise SystemExit("Selection out of range.")
     return options[idx - 1]
+
+
+def prompt_choose_solver(solver_dirs: List[Path]) -> Path:
+    """Prompt user to select which solver output to validate."""
+    print("Available solver outputs:")
+    for idx, solver in enumerate(solver_dirs, start=1):
+        print(f"[{idx}] {solver.name} ({solver})")
+    choice = input(f"Select solver [1-{len(solver_dirs)}] (default 1): ").strip()
+    if not choice:
+        return solver_dirs[0]
+    try:
+        idx = int(choice)
+    except ValueError:
+        raise SystemExit("Invalid solver selection.")
+    if idx < 1 or idx > len(solver_dirs):
+        raise SystemExit("Solver selection out of range.")
+    return solver_dirs[idx - 1]
+
+
+def prompt_run_mode() -> str:
+    """Prompt for whether to validate all instances or a single one."""
+    print("Validation mode:")
+    print("[1] Validate all instances for this solver")
+    print("[2] Validate a single instance")
+    choice = input("Choose mode [1-2] (default 1): ").strip()
+    if not choice or choice == "1":
+        return "all"
+    if choice == "2":
+        return "single"
+    raise SystemExit("Invalid mode selection.")
 
 
 @dataclass
@@ -205,30 +239,8 @@ def validate(data: InstanceData) -> List[str]:
     return errors
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Validate schedule HTML from test.py output.")
-    parser.add_argument(
-        "html_file",
-        nargs="?",
-        help="Path to HTML output file from test.py",
-    )
-    parser.add_argument(
-        "--auto",
-        action="store_true",
-        help="Auto-detect schedule HTML files in Output/* (or legacy Output_*) and prompt for selection (default when no html_file is given)",
-    )
-    args = parser.parse_args()
-
-    if args.html_file:
-        html_path = Path(args.html_file)
-    else:
-        # default to auto-pick when no explicit path is provided
-        candidates = find_html_outputs()
-        if not candidates:
-            raise SystemExit("No schedule HTML files found under Output/ or Output_*.") 
-        html_path = prompt_choose(candidates)
-        print(f"Selected: {html_path}")
-
+def validate_html_file(html_path: Path) -> Tuple[str, List[str]]:
+    """Read an HTML schedule and return instance name with validation errors (empty if valid)."""
     html = html_path.read_text(encoding="utf-8")
 
     instance, m, c, r_max, R_max = parse_meta(html)
@@ -248,14 +260,86 @@ def main():
         res_counts=res_counts,
         starts=starts,
     )
+    return instance, validate(data)
 
-    errs = validate(data)
-    if not errs:
-        print(f"VALID: schedule satisfies constraints for {instance}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Validate schedule HTML from test.py output.")
+    parser.add_argument(
+        "html_file",
+        nargs="?",
+        help="Path to HTML output file from test.py",
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Auto-detect schedule HTML files in Output/* (or legacy Output_*) and prompt for selection (default when no html_file is given)",
+    )
+    args = parser.parse_args()
+
+    html_paths: List[Path]
+    if args.html_file:
+        html_paths = [Path(args.html_file)]
     else:
-        print(f"INVALID ({len(errs)} issues):")
-        for e in errs:
-            print(f"- {e}")
+        solver_dirs = find_solver_dirs()
+        if not solver_dirs:
+            raise SystemExit("No solver outputs found under Output/ or Output_*.")
+        solver_dir = prompt_choose_solver(solver_dirs)
+
+        candidates = find_html_outputs_for_solver(solver_dir)
+        if not candidates:
+            raise SystemExit(f"No schedule HTML files found under {solver_dir}.")
+
+        mode = prompt_run_mode()
+        if mode == "single":
+            html_paths = [prompt_choose(candidates)]
+            print(f"Selected: {html_paths[0]}")
+        else:
+            html_paths = candidates
+            print(f"Validating all {len(html_paths)} schedules under {solver_dir}")
+
+    multi_run = len(html_paths) > 1
+    if not multi_run:
+        html_path = html_paths[0]
+        print(f"Validating {html_path}")
+        instance, errs = validate_html_file(html_path)
+        if not errs:
+            print(f"VALID: schedule satisfies constraints for {instance}")
+        else:
+            print(f"INVALID ({len(errs)} issues) for {instance}:")
+            for e in errs:
+                print(f"- {e}")
+        return
+
+    # Multi-file run: only print details for invalid ones, summarize valids.
+    invalid_results: List[Tuple[Path, str, List[str]]] = []
+    valid_count = 0
+
+    for html_path in html_paths:
+        try:
+            instance, errs = validate_html_file(html_path)
+        except Exception as exc:  # keep going even if one file is broken
+            errs = [f"Failed to validate: {exc}"]
+            instance = html_path.stem
+
+        if errs:
+            invalid_results.append((html_path, instance, errs))
+        else:
+            valid_count += 1
+
+    if invalid_results:
+        print("\nInvalid schedules:")
+        for html_path, instance, errs in invalid_results:
+            print(f"\n--- {html_path} ({instance}) ---")
+            print(f"{len(errs)} issue(s):")
+            for e in errs:
+                print(f"- {e}")
+    else:
+        print("\nNo invalid schedules found.")
+
+    print(
+        f"\nFinished {len(html_paths)} files: {valid_count} valid, {len(invalid_results)} invalid."
+    )
 
 
 if __name__ == "__main__":
