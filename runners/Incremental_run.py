@@ -1,12 +1,13 @@
-"""
-Wrapper script to run test.py entirely in WSL
-This avoids Windows Python dependency issues
-"""
 import subprocess
 import sys
 
-# Build command
-bash_cmd = "cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && .venv_wsl/bin/python base.py"
+# Use absolute paths to avoid truncation or CWD issues
+WSL_ROOT = "/mnt/c/Users/admin/Documents/Python/P3SAML3P"
+VENV_PY = f"{WSL_ROOT}/.venv_wsl/bin/python"
+SCRIPT = f"{WSL_ROOT}/solvers/Incremental.py"
+
+# Build command (quote paths in case of spaces)
+bash_cmd = f"cd '{WSL_ROOT}' && '{VENV_PY}' '{SCRIPT}'"
 
 # Add any command line arguments
 if len(sys.argv) > 1:

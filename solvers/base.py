@@ -39,9 +39,12 @@ R_max = 0
 n = 0
 summary_rows: List[Dict[str, Any]] = []
 SCRIPT_NAME = Path(__file__).name
-OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", f"Output_{Path(__file__).stem}"))
-var_map = {}
-var_counter = 0
+SCRIPT_PATH = Path(__file__).resolve().as_posix()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / f"Output_{Path(__file__).stem}"
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
+DATA_DIR = PROJECT_ROOT / "presedent_graph"
+POWER_DIR = PROJECT_ROOT / "official_task_power"
 
 def flush_summary():
     """Write summary rows replacing any existing entry with the same key."""
@@ -59,7 +62,7 @@ def flush_summary():
         )
 
     out_dir = OUTPUT_ROOT
-    out_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "summary.csv"
 
     existing: List[Dict[str, Any]] = []
@@ -158,24 +161,18 @@ data_set = [
 ]
 
 def refresh_globals():
-    global time_list, adj, neighbors, reversed_neighbors, W, X, S, A, R, n, m, c, r_max, R_max, var_map, var_counter, best_model, best_peak
+    global time_list, adj, neighbors, reversed_neighbors, W
     time_list = []
     adj = []
     neighbors = [[0 for _ in range(1000)] for _ in range(1000)]
     reversed_neighbors = [[0 for _ in range(1000)] for _ in range(1000)]
     W = []
-    X = []
-    S = []
-    A = []
-    R = []
-    var_counter = 0
-    var_map = {}
-    
 
 def read_input(name):
     cnt = 0
     global n, time_list, adj, neighbors, reversed_neighbors
-    with open('presedent_graph/' + name + '.IN2', 'r') as f:
+    input_path = DATA_DIR / f"{name}.IN2"
+    with input_path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -196,7 +193,8 @@ def read_input(name):
 def load_power(name):
     """Read task power values for the given instance name."""
     global W
-    with open('official_task_power/' + name + '.txt', 'r') as f:
+    power_path = POWER_DIR / f"{name}.txt"
+    with power_path.open("r", encoding="utf-8") as f:
         W = [int(line.strip()) for line in f if line.strip()]
 
 def max_var_id():
@@ -214,114 +212,44 @@ def generate_vars():
     A = [[m*n + r_max*c*n + j*c*r_max + i + 1 for i in range (c*r_max)] for j in range(n)]
     R = [[m*n + r_max*c*n + c*r_max*n + k*r_max + i + 1 for i in range (r_max)] for k in range(m)]
 
-def get_key(value):
-    for key, val in var_map:
-        if (val == value):
-            return key
-
-def get_var(name, *args):
-    global var_counter
-    key = (name,) + args
-    if key not in var_map:
-        var_counter += 1
-        var_map[key] = var_counter
-    return var_map[key]
-
-def set_var(value, name, *args):
-    """Set a variable in the global var_map."""
-    key = (name,) + args
-    if value is not None:
-        var_map[key] = value
-    else:
-        if key not in var_map:
-            global var_counter
-            var_counter += 1
-            var_map[key] = var_counter
-    return var_map[key]
-
-
 def build_base_formula():
     """Build CNF for feasibility (all constraints except peak minimization)."""
-    global var_counter
     horizon = c * r_max
     solver = Cadical195()
     var_counter = max_var_id()
-    print("var_counter:", var_counter)
     base_clauses = []
 
     def emit(clause):
         base_clauses.append(clause)
         solver.add_clause(clause)
 
-    # # Quick infeasibility: if any task longer than horizon, force UNSAT.
-    # for task_id, duration in enumerate(time_list):
-    #     if duration > horizon:
-    #         emit([1, -1])
-    #         return solver, var_counter, horizon, base_clauses
+    # Quick infeasibility: if any task longer than horizon, force UNSAT.
+    for task_id, duration in enumerate(time_list):
+        if duration > horizon:
+            emit([1, -1])
+            return solver, var_counter, horizon, base_clauses
 
     valid_starts = []
 
-    # # (C1) ALO cho X
-    # for j in range(n):
-    #     emit([X[j][k] for k in range(m)])
+    # (C1) ALO cho X
+    for j in range(n):
+        emit([X[j][k] for k in range(m)])
 
-    # # (C2) AMO cho X
-    # for j in range(n):
-    #     for k1 in range(m):
-    #         for k2 in range(k1 + 1, m):
-    #             emit([-X[j][k1], -X[j][k2]])
+    # (C2) AMO cho X
+    for j in range(n):
+        for k1 in range(m):
+            for k2 in range(k1 + 1, m):
+                emit([-X[j][k1], -X[j][k2]])
 
-    # # (C3) ALO cho S và (C4) AMO cho S
+    # (C3) ALO cho S và (C4) AMO cho S
     for j, tj in enumerate(time_list):
         latest_start = horizon - tj
         starts = [t for t in range(latest_start + 1)]
         valid_starts.append(starts)
-        # emit([S[j][t] for t in starts])
-        # for t1 in range(len(starts)):
-        #     for t2 in range(t1 + 1, len(starts)):
-        #         emit([-S[j][starts[t1]], -S[j][starts[t2]]])
-
-    # (C1 + C2) Staircase encoding cho X va S
-    for j in range(n):
-        set_var(X[j][0],"Y",j,0)
-        for k in range(1,m-1):
-            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])
-            emit([-X[j][k], get_var("Y", j, k)])
-            emit([-X[j][k], -get_var("Y", j, k-1)])
-            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])
-        # Last machine
-        emit([get_var("Y", j, m-2), X[j][m-1]])
-        emit([-get_var("Y", j, m-2), -X[j][m-1]])  
-    print("After var: ", var_counter)
-    
-    # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
-    for i, j in adj:
-        for k in range(m-1):
-            emit([-get_var("Y",j,k), -X[i][k+1]])
-
-    # T[j][t] represents "task j starts at time t or earlier"
-    for j in range(n):
-        last_t = horizon-time_list[j]
-        
-        # Special case: Full cycle tasks (only one feasible start time: t=0)
-        if last_t == 0:
-            # Force the task to start at t=0 (equivalent to original constraint #4)
-            emit([S[j][0]])
-        else:
-            # First time slot
-            set_var(S[j][0], "T", j, 0)
-            
-            # Intermediate time slots
-            for t in range(1, last_t):
-                emit([-get_var("T", j, t-1), get_var("T", j, t)]) # T[j][t-1] -> T[j][t]
-                emit([-S[j][t], get_var("T", j, t)]) # S[j][t] -> T[j][t]
-                emit([-S[j][t], -get_var("T", j, t-1)]) # S[j][t] -> ¬T[j][t-1]
-                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)]) # T[j][t] -> (T[j][t-1] ∨ S[j][t])
-            
-            # Last time slot (ensures at least one start time)
-            emit([get_var("T", j, last_t-1), S[j][last_t]])
-            emit([-get_var("T", j, last_t-1), -S[j][last_t]])
-
+        emit([S[j][t] for t in starts])
+        for t1 in range(len(starts)):
+            for t2 in range(t1 + 1, len(starts)):
+                emit([-S[j][starts[t1]], -S[j][starts[t2]]])
 
     # (C5) Nếu khởi động thì phải đang chạy đủ tj bước
     for j, tj in enumerate(time_list):
@@ -337,32 +265,19 @@ def build_base_formula():
                 for t in range(horizon):
                     emit([-X[i][k], -X[j][k], -A[i][t], -A[j][t]])
 
-    # # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
-    # for i, j in adj:
-    #     for k in range(m):
-    #         for h in range(k + 1, m):
-    #             emit([-X[j][k], -X[i][h]])
+    # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    for i, j in adj:
+        for k in range(m):
+            for h in range(k + 1, m):
+                emit([-X[j][k], -X[i][h]])
 
     # (C8) Trong cùng máy thì i không được bắt đầu sau j
-    # for i, j in adj:
-    #     for k in range(m):
-    #         for t1 in valid_starts[i]:
-    #             for t2 in valid_starts[j]:
-    #                 if t1 > t2:
-    #                     emit([-X[i][k], -X[j][k], -S[i][t1], -S[j][t2]])
-
-
-    for i,j in adj:
+    for i, j in adj:
         for k in range(m):
-
-            left_bound = time_list[i] - 1
-            right_bound = horizon - time_list[j]
-            emit([-X[i][k], -X[j][k], -get_var("T", j, left_bound)])
-            for t in range (left_bound + 1, right_bound):
-                t_i = t - time_list[i]+1
-                emit([-X[i][k], -X[j][k], -get_var("T", j, t), -S[i][t_i]])
-            for t in range (max(0,right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
-                emit([-X[i][k], -X[j][k], -S[i][t], -get_var("T",j,horizon-time_list[j]-1)])
+            for t1 in valid_starts[i]:
+                for t2 in valid_starts[j]:
+                    if t1 > t2:
+                        emit([-X[i][k], -X[j][k], -S[i][t1], -S[j][t2]])
 
     # (C9) Nếu dùng tài nguyên r+1 thì phải dùng r
     for k in range(m):
@@ -561,7 +476,6 @@ th {{ background: #f0f0f0; position: sticky; top: 0; }}
     return outfile
 
 def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
-    print("run single instance")
     global name, m, c, r_max, R_max, X, S, A, R, best_model, best_peak
     name = name_param
     m = m_param
@@ -575,7 +489,7 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     read_input(name)
     load_power(name)
     generate_vars()
-    print("Staircase 1 3")
+    print("Base solving")
     print(f"Solving {name} with m={m}, c={c}, r_max={r_max}, R_max={R_max}")
     t_start = time.time()
     solver, var_counter, horizon, base_clauses = build_base_formula()
@@ -681,20 +595,6 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         print("Run all tests")
         TIMEOUT = 3600
-        completed_runs = set()
-        summary_csv = OUTPUT_ROOT / "summary.csv"
-        if summary_csv.exists():
-            with summary_csv.open("r", encoding="utf-8") as f:
-                for row in csv.DictReader(f):
-                    completed_runs.add(
-                        (
-                            str(row.get("name", "")),
-                            str(row.get("m", "")),
-                            str(row.get("c", "")),
-                            str(row.get("r_max", "")),
-                            str(row.get("R_max", "")),
-                        )
-                    )
 
         for instance_id in range(0, len(data_set)):
             instance = data_set[instance_id]
@@ -705,19 +605,19 @@ if __name__ == "__main__":
             for r_max in range(1,4):
                 for R_max in range(m, r_max * m + 1):
                     if is_wsl:
-                        # Already in WSL, run directly
-                        command = f'cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && ./runlim -r {TIMEOUT} .venv_wsl/bin/python {SCRIPT_NAME} {instance_id} {r_max} {R_max}'
+                        # Already in WSL, run directly (absolute path)
+                        command = (
+                            f"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}"
+                        )
                     else:
-                        # On Windows, call WSL
-                        command = f'wsl bash -c "cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && ./runlim -r {TIMEOUT} .venv_wsl/bin/python {SCRIPT_NAME} {instance_id} {r_max} {R_max}"'
+                        # On Windows, call WSL (absolute path)
+                        command = (
+                            "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\""
+                        )
 
                     try:
-                        key = (str(name), str(m), str(c), str(r_max), str(R_max))
-                        if key in completed_runs:
-                            print(f"Skipping instance {instance} {r_max} {R_max} (already in summary.csv)")
-                            continue
-                        completed_runs.add(key)
-
                         print(f"Running instance {instance} {r_max} {R_max}")
                         process = subprocess.Popen(command, shell=True)
                         process.wait()

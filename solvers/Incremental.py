@@ -39,7 +39,13 @@ R_max = 0
 n = 0
 summary_rows: List[Dict[str, Any]] = []
 SCRIPT_NAME = Path(__file__).name
-OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", f"Output_{Path(__file__).stem}"))
+# Use absolute POSIX path for self-invocation under WSL
+SCRIPT_PATH = Path(__file__).resolve().as_posix()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / f"Output_{Path(__file__).stem}"
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
+DATA_DIR = PROJECT_ROOT / "presedent_graph"
+POWER_DIR = PROJECT_ROOT / "official_task_power"
 var_map = {}
 var_counter = 0
 
@@ -59,7 +65,7 @@ def flush_summary():
         )
 
     out_dir = OUTPUT_ROOT
-    out_dir.mkdir(exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = out_dir / "summary.csv"
 
     existing: List[Dict[str, Any]] = []
@@ -175,7 +181,8 @@ def refresh_globals():
 def read_input(name):
     cnt = 0
     global n, time_list, adj, neighbors, reversed_neighbors
-    with open('presedent_graph/' + name + '.IN2', 'r') as f:
+    input_path = DATA_DIR / f"{name}.IN2"
+    with input_path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -196,7 +203,8 @@ def read_input(name):
 def load_power(name):
     """Read task power values for the given instance name."""
     global W
-    with open('official_task_power/' + name + '.txt', 'r') as f:
+    power_path = POWER_DIR / f"{name}.txt"
+    with power_path.open("r", encoding="utf-8") as f:
         W = [int(line.strip()) for line in f if line.strip()]
 
 def max_var_id():
@@ -737,11 +745,17 @@ if __name__ == "__main__":
             for r_max in range(1,4):
                 for R_max in range(m, r_max * m + 1):
                     if is_wsl:
-                        # Already in WSL, run directly
-                        command = f'cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && ./runlim -r {TIMEOUT} .venv_wsl/bin/python {SCRIPT_NAME} {instance_id} {r_max} {R_max}'
+                        # Already in WSL, run directly using absolute script path
+                        command = (
+                            f"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}"
+                        )
                     else:
-                        # On Windows, call WSL
-                        command = f'wsl bash -c "cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && ./runlim -r {TIMEOUT} .venv_wsl/bin/python {SCRIPT_NAME} {instance_id} {r_max} {R_max}"'
+                        # On Windows, call WSL, quoting absolute script path
+                        command = (
+                            "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\""
+                        )
 
                     try:
                         key = (str(name), str(m), str(c), str(r_max), str(R_max))
