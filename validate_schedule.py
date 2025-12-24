@@ -2,7 +2,7 @@
 Validate schedules produced by test.py HTML output files.
 
 Usage:
-    python validate_schedule.py Output_Staircase13/MERTENS_n7_m6_c6/r3_R6/MERTENS_n7_m6_c6_r3_R6.html
+    python validate_schedule.py Output/Staircase13/MERTENS_n7_m6_c6/r3_R6/MERTENS_n7_m6_c6_r3_R6.html
     python validate_schedule.py --auto
 
 Checks:
@@ -24,15 +24,25 @@ from typing import List, Tuple
 
 
 def find_html_outputs() -> List[Path]:
-    """Find schedule HTML files under Output_* (excluding summary tables)."""
-    candidates: List[Path] = []
-    for root in Path(".").glob("Output_*"):
-        if not root.is_dir():
-            continue
+    """
+    Find schedule HTML files under Output/{solver} (or legacy Output_*) excluding summary tables.
+    """
+    candidates: set[Path] = set()
+    search_roots: List[Path] = []
+
+    output_root = Path("Output")
+    if output_root.exists():
+        search_roots.extend([p for p in output_root.iterdir() if p.is_dir()])
+
+    for legacy in Path(".").glob("Output_*"):
+        if legacy.is_dir():
+            search_roots.append(legacy)
+
+    for root in search_roots:
         for html_file in root.rglob("*.html"):
             if "summary" in html_file.name.lower():
                 continue
-            candidates.append(html_file)
+            candidates.add(html_file)
     return sorted(candidates)
 
 
@@ -205,7 +215,7 @@ def main():
     parser.add_argument(
         "--auto",
         action="store_true",
-        help="Auto-detect schedule HTML files in Output_* and prompt for selection (default when no html_file is given)",
+        help="Auto-detect schedule HTML files in Output/* (or legacy Output_*) and prompt for selection (default when no html_file is given)",
     )
     args = parser.parse_args()
 
@@ -215,7 +225,7 @@ def main():
         # default to auto-pick when no explicit path is provided
         candidates = find_html_outputs()
         if not candidates:
-            raise SystemExit("No schedule HTML files found under Output_*.") 
+            raise SystemExit("No schedule HTML files found under Output/ or Output_*.") 
         html_path = prompt_choose(candidates)
         print(f"Selected: {html_path}")
 

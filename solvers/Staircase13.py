@@ -41,7 +41,8 @@ summary_rows: List[Dict[str, Any]] = []
 SCRIPT_NAME = Path(__file__).name
 SCRIPT_PATH = Path(__file__).resolve().as_posix()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / f"Output_{Path(__file__).stem}"
+# Default to consolidated Output/{solver_name}
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "Output" / Path(__file__).stem
 OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
 DATA_DIR = PROJECT_ROOT / "presedent_graph"
 POWER_DIR = PROJECT_ROOT / "official_task_power"

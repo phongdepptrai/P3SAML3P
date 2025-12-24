@@ -6,15 +6,26 @@ from collections import defaultdict
 from statistics import mean
 from pathlib import Path
 
-DEFAULT_OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", "Output_Staircase13"))
+# Default to the new consolidated Output/{solver} layout; still configurable via OUTPUT_ROOT.
+DEFAULT_OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", "Output/Staircase13"))
 
 
 def find_summary_dirs():
-    """Return Output_* directories that contain a summary.csv."""
+    """
+    Return output directories that contain a summary.csv.
+    Prefer the new Output/{solver} layout, but fall back to legacy Output_*.
+    """
     dirs = []
-    for entry in Path(".").iterdir():
-        if entry.is_dir() and entry.name.startswith("Output_") and (entry / "summary.csv").exists():
-            dirs.append(entry)
+    output_root = Path("Output")
+    if output_root.exists():
+        for entry in output_root.iterdir():
+            if entry.is_dir() and (entry / "summary.csv").exists():
+                dirs.append(entry)
+    if not dirs:
+        # Legacy layout support: Output_* at repo root
+        for entry in Path(".").iterdir():
+            if entry.is_dir() and entry.name.startswith("Output_") and (entry / "summary.csv").exists():
+                dirs.append(entry)
     return sorted(dirs)
 
 
@@ -332,7 +343,7 @@ def main():
         "--csv",
         type=Path,
         default=None,
-        help="Path to summary.csv. If omitted, will prompt from detected Output_* directories.",
+        help="Path to summary.csv. If omitted, will prompt from detected Output/* (or legacy Output_*) directories.",
     )
     parser.add_argument(
         "--out",
@@ -343,7 +354,7 @@ def main():
     parser.add_argument(
         "--auto",
         action="store_true",
-        help="Auto-detect Output_* directories with summary.csv and prompt for selection (default when --csv not given)",
+        help="Auto-detect Output/* (or legacy Output_*) directories with summary.csv and prompt for selection (default when --csv not given)",
     )
     args = parser.parse_args()
 
@@ -355,9 +366,9 @@ def main():
             if fallback_csv.exists():
                 args.csv = fallback_csv
                 args.out = args.out or fallback_csv.parent / "summary_table.html"
-                print(f"No Output_* detected; using default {args.csv}")
+                print(f"No Output/* or Output_* detected; using default {args.csv}")
             else:
-                raise SystemExit("No Output_* directories with summary.csv found, and default summary.csv missing.")
+                raise SystemExit("No Output/* or Output_* directories with summary.csv found, and default summary.csv missing.")
         else:
             selected = prompt_choose(dirs, "output directory")
             args.csv = selected / "summary.csv"
