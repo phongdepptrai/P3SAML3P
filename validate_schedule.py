@@ -2,7 +2,8 @@
 Validate schedules produced by test.py HTML output files.
 
 Usage:
-    python validate_schedule.py Output_html/MERTENS_n7_m6_c6/r3_R6/MERTENS_n7_m6_c6_r3_R6.html
+    python validate_schedule.py Output_Staircase13/MERTENS_n7_m6_c6/r3_R6/MERTENS_n7_m6_c6_r3_R6.html
+    python validate_schedule.py --auto
 
 Checks:
     - Each task has a machine and start within horizon.
@@ -20,6 +21,36 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
+
+
+def find_html_outputs() -> List[Path]:
+    """Find schedule HTML files under Output_* (excluding summary tables)."""
+    candidates: List[Path] = []
+    for root in Path(".").glob("Output_*"):
+        if not root.is_dir():
+            continue
+        for html_file in root.rglob("*.html"):
+            if "summary" in html_file.name.lower():
+                continue
+            candidates.append(html_file)
+    return sorted(candidates)
+
+
+def prompt_choose(options: List[Path]) -> Path:
+    """Prompt user to select a path; default is first."""
+    print("Detected schedule outputs:")
+    for idx, opt in enumerate(options, start=1):
+        print(f"[{idx}] {opt}")
+    choice = input(f"Select HTML [1-{len(options)}] (default 1): ").strip()
+    if not choice:
+        return options[0]
+    try:
+        idx = int(choice)
+    except ValueError:
+        raise SystemExit("Invalid selection.")
+    if idx < 1 or idx > len(options):
+        raise SystemExit("Selection out of range.")
+    return options[idx - 1]
 
 
 @dataclass
@@ -166,10 +197,28 @@ def validate(data: InstanceData) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(description="Validate schedule HTML from test.py output.")
-    parser.add_argument("html_file", help="Path to HTML output file from test.py")
+    parser.add_argument(
+        "html_file",
+        nargs="?",
+        help="Path to HTML output file from test.py",
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Auto-detect schedule HTML files in Output_* and prompt for selection (default when no html_file is given)",
+    )
     args = parser.parse_args()
 
-    html_path = Path(args.html_file)
+    if args.html_file:
+        html_path = Path(args.html_file)
+    else:
+        # default to auto-pick when no explicit path is provided
+        candidates = find_html_outputs()
+        if not candidates:
+            raise SystemExit("No schedule HTML files found under Output_*.") 
+        html_path = prompt_choose(candidates)
+        print(f"Selected: {html_path}")
+
     html = html_path.read_text(encoding="utf-8")
 
     instance, m, c, r_max, R_max = parse_meta(html)

@@ -39,6 +39,7 @@ R_max = 0
 n = 0
 summary_rows: List[Dict[str, Any]] = []
 SCRIPT_NAME = Path(__file__).name
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", f"Output_{Path(__file__).stem}"))
 
 def flush_summary():
     """Write summary rows replacing any existing entry with the same key."""
@@ -55,7 +56,7 @@ def flush_summary():
             str(row["R_max"]),
         )
 
-    out_dir = Path("Output_html")
+    out_dir = OUTPUT_ROOT
     out_dir.mkdir(exist_ok=True)
     csv_path = out_dir / "summary.csv"
 
@@ -94,6 +95,26 @@ def flush_summary():
         pass
 
     summary_rows.clear()
+
+def add_summary_row(status: str, peak: Any, attempts: int, runtime_sec: float, base_vars: int, base_clause_count: int):
+    """Append a summary row and flush it to disk."""
+    summary_rows.append(
+        {
+            "name": name,
+            "n": n,
+            "m": m,
+            "c": c,
+            "r_max": r_max,
+            "R_max": R_max,
+            "base_vars": base_vars,
+            "base_clauses": base_clause_count,
+            "peak": peak,
+            "attempts": attempts,
+            "runtime_sec": round(runtime_sec, 3),
+            "status": status,
+        }
+    )
+    flush_summary()
 
 data_set = [
     # Easy families 
@@ -383,14 +404,14 @@ def build_compact_table(model, horizon):
     return tables
 
 def write_html_schedule(instance_name, m_val, c_val, r_max_val, R_max_val, model, horizon, peak, runtime_sec):
-    """Write an HTML table for the schedule to Output_html/<instance>_mX_cY/rX_RY/."""
+    """Write an HTML table for the schedule to OUTPUT_ROOT/<instance>_mX_cY/rX_RY/."""
     if model is None:
         return None
     _, starts = build_schedule(model, horizon)
     compact = build_compact_table(model, horizon)
     res_counts = decode_resources(model)
 
-    out_dir = Path("Output_html") / f"{instance_name}_n{n}_m{m_val}_c{c_val}" / f"r{r_max_val}_R{R_max_val}"
+    out_dir = OUTPUT_ROOT / f"{instance_name}_n{n}_m{m_val}_c{c_val}" / f"r{r_max_val}_R{R_max_val}"
     out_dir.mkdir(parents=True, exist_ok=True)
     outfile = out_dir / f"{instance_name}_n{n}_m{m_val}_c{c_val}_r{r_max_val}_R{R_max_val}.html"
     if outfile.exists():
@@ -465,46 +486,29 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     print(f"Solving {name} with m={m}, c={c}, r_max={r_max}, R_max={R_max}")
     t_start = time.time()
     solver, var_counter, horizon, base_clauses = build_base_formula()
+    base_clause_count = len(base_clauses)
     # Record STARTED marker
-    summary_rows.append(
-        {
-            "name": name,
-            "n": n,
-            "m": m,
-            "c": c,
-            "r_max": r_max,
-            "R_max": R_max,
-            "base_vars": var_counter,
-            "base_clauses": len(base_clauses),
-            "peak": "",
-            "attempts": 0,
-            "runtime_sec": 0.0,
-            "status": "STARTED",
-        }
+    add_summary_row(
+        status="STARTED",
+        peak="",
+        attempts=0,
+        runtime_sec=0.0,
+        base_vars=var_counter,
+        base_clause_count=base_clause_count,
     )
-    flush_summary()
 
     # Initial solve for feasibility
     if not solver.solve():
         runtime = time.time() - t_start
         print("UNSAT or timed out")
-        summary_rows.append(
-            {
-                "name": name,
-                "n": n,
-                "m": m,
-                "c": c,
-                "r_max": r_max,
-                "R_max": R_max,
-                "base_vars": var_counter,
-                "base_clauses": len(base_clauses),
-                "peak": "",
-                "attempts": 0,
-                "runtime_sec": round(runtime, 3),
-                "status": "TIMEOUT_INFEASIBLE",
-            }
+        add_summary_row(
+            status="TIMEOUT_INFEASIBLE",
+            peak="",
+            attempts=0,
+            runtime_sec=runtime,
+            base_vars=var_counter,
+            base_clause_count=base_clause_count,
         )
-        flush_summary()
         return
 
     model = solver.get_model()
@@ -513,23 +517,14 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     runtime_first = time.time() - t_start
 
     # Flush FEASIBLE immediately
-    summary_rows.append(
-        {
-            "name": name,
-            "n": n,
-            "m": m,
-            "c": c,
-            "r_max": r_max,
-            "R_max": R_max,
-            "base_vars": var_counter,
-            "base_clauses": len(base_clauses),
-            "peak": first_peak,
-            "attempts": 0,
-            "runtime_sec": round(runtime_first, 3),
-            "status": "FEASIBLE",
-        }
+    add_summary_row(
+        status="FEASIBLE",
+        peak=first_peak,
+        attempts=0,
+        runtime_sec=runtime_first,
+        base_vars=var_counter,
+        base_clause_count=base_clause_count,
     )
-    flush_summary()
 
     # Tighten bound iteratively
     best_model = model
@@ -547,8 +542,23 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
             break
 
         model = fresh_solver.get_model()
+        # Flush INTERMEDIATE snapshot
+        runtime_intermediate = time.time() - t_start
+        add_summary_row(
+            status="INTERMEDIATE",
+            peak=bound,
+            attempts=attempts,
+            runtime_sec=runtime_intermediate,
+            base_vars=var_counter,
+            base_clause_count=base_clause_count,
+        )
         size = max(fresh_var_counter, max(abs(l) for l in model))
         peak_found, _ = compute_peak(decode_model(model, size), horizon)
+        outfile = write_html_schedule(
+            name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
+        )
+        if outfile:
+            print(f"HTML schedule (intermediate) written to {outfile}")
         best_model = model
         best_peak = peak_found
         bound = peak_found - 1
@@ -561,23 +571,14 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
         print(f"HTML schedule written to {outfile}")
 
     # Final OPTIMAL snapshot (or best found)
-    summary_rows.append(
-        {
-            "name": name,
-            "n": n,
-            "m": m,
-            "c": c,
-            "r_max": r_max,
-            "R_max": R_max,
-            "base_vars": var_counter,
-            "base_clauses": len(base_clauses),
-            "peak": best_peak,
-            "attempts": attempts,
-            "runtime_sec": round(runtime, 3),
-            "status": "OPTIMAL",
-        }
+    add_summary_row(
+        status="OPTIMAL",
+        peak=best_peak,
+        attempts=attempts,
+        runtime_sec=runtime,
+        base_vars=var_counter,
+        base_clause_count=base_clause_count,
     )
-    flush_summary()
 
 
 if __name__ == "__main__":

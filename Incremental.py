@@ -391,6 +391,7 @@ def build_base_formula():
         emit(cl)
     var_counter = max(var_counter, enc.nv)
 
+
     return solver, var_counter, horizon, base_clauses
 
 def decode_model(model, size):
@@ -426,23 +427,6 @@ def compute_peak(assign, horizon):
     peak = max(loads) if loads else 0
     return peak, loads
 
-def add_peak_constraints(solver, bound, var_counter, horizon):
-    """Add PB constraints: for each real-time phase tau, load <= bound."""
-    for tau in range(c):
-        lits = []
-        weights = []
-        for j in range(n):
-            wj = W[j] if j < len(W) else 0
-            for q in range(r_max):
-                t = tau + q * c
-                if t < horizon:
-                    lits.append(A[j][t])
-                    weights.append(wj)
-        enc = PBEnc.leq(lits=lits, weights=weights, bound=bound, top_id=var_counter, encoding=EncType.binmerge)
-        for cl in enc.clauses:
-            solver.add_clause(cl)
-        var_counter = max(var_counter, enc.nv)
-    return var_counter
 
 def summarize_solution(model, horizon):
     if model is None:
@@ -560,9 +544,54 @@ th {{ background: #f0f0f0; position: sticky; top: 0; }}
     outfile.write_text(html, encoding="utf-8")
     return outfile
 
+def add_inagural(solver, peak):
+    """Add INAGURAL constraints to the solver."""
+    global var_counter, U, r_max, c, W, A, n, R_max
+    horizon = c * r_max
+    LB = max(W)
+    UB = peak
+    U = []
+
+    # Ladder vars for bounds LB+1 .. UB-1 
+    for _ in range(LB + 1, UB):
+        U.append(var_counter + 1)
+        var_counter += 1
+    
+    for i in range(1, len(U)):
+        solver.add_clause([-U[i], U[i-1]])
+
+    top_id = var_counter + 1
+    for t in range(c):
+        lits = []
+        weights = []
+        for u in U:
+            lits.append(-u)
+            weights.append(1)
+        for i in range(n):
+           lits.append(A[i][t])
+           weights.append(W[i])
+
+        if r_max >= 2:
+            for i in range(n):
+                lits.append(A[i][t+c])
+                weights.append(W[i])
+        if r_max >= 3:
+            for i in range(n):
+                lits.append(A[i][t+2*c])
+                weights.append(W[i])
+        
+        enc = PBEnc.leq(lits=lits, weights=weights, bound=UB, top_id=top_id, encoding=EncType.binmerge)
+
+        if enc.nv > var_counter:
+            var_counter = enc.nv
+            top_id = var_counter + 1
+        for cl in enc.clauses:
+            solver.add_clause(cl)
+    return solver
+
 def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     print("run single instance")
-    global name, m, c, r_max, R_max, X, S, A, R, best_model, best_peak
+    global name, m, c, r_max, R_max, X, S, A, R, best_model, best_peak, U
     name = name_param
     m = m_param
     c = c_param
@@ -580,7 +609,7 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     t_start = time.time()
     solver, var_counter, horizon, base_clauses = build_base_formula()
     base_clause_count = len(base_clauses)
-    # Record STARTED marker
+
     add_summary_row(
         status="STARTED",
         peak="",
@@ -622,31 +651,30 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     # Tighten bound iteratively
     best_model = model
     best_peak = first_peak
-    attempts = 0
-    bound = first_peak - 1
-    while bound >= 0:
-        attempts += 1
-        fresh_solver = Cadical195()
-        for cl in base_clauses:
-            fresh_solver.add_clause(cl)
-        fresh_var_counter = add_peak_constraints(fresh_solver, bound, var_counter, horizon)
+    print("solver clauses:", solver.nof_clauses())
+    solver = add_inagural(solver, best_peak)
+    print("After INAGURAL, solver clauses:", solver.nof_clauses())
 
-        if not fresh_solver.solve():
+    attempts = 0
+    LB = max(W)
+    while True:
+        attempts += 1
+        if not solver.solve():
             break
 
-        model = fresh_solver.get_model()
+        model = solver.get_model()
         # Flush INTERMEDIATE snapshot
         runtime_intermediate = time.time() - t_start
+        size = max(var_counter, max(abs(l) for l in model))
+        peak_found, _ = compute_peak(decode_model(model, size), horizon)
         add_summary_row(
             status="INTERMEDIATE",
-            peak=bound,
+            peak=peak_found,
             attempts=attempts,
             runtime_sec=runtime_intermediate,
             base_vars=var_counter,
             base_clause_count=base_clause_count,
         )
-        size = max(fresh_var_counter, max(abs(l) for l in model))
-        peak_found, _ = compute_peak(decode_model(model, size), horizon)
         outfile = write_html_schedule(
             name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
         )
@@ -654,7 +682,11 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
             print(f"HTML schedule (intermediate) written to {outfile}")
         best_model = model
         best_peak = peak_found
-        bound = peak_found - 1
+        idx = best_peak - LB - 1
+        print("New best peak:", best_peak)  
+        if idx <= 0 or idx > len(U):
+            break
+        solver.add_clause([-U[idx - 1]])  # Exclude previous peak candidate
 
     runtime = time.time() - t_start
     print(f"Best peak: {best_peak} | runtime: {runtime:.3f}s")
