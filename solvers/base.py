@@ -596,6 +596,20 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         print("Run all tests")
         TIMEOUT = 3600
+        completed_runs = set()
+        summary_csv = OUTPUT_ROOT / "summary.csv"
+        if summary_csv.exists():
+            with summary_csv.open("r", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    completed_runs.add(
+                        (
+                            str(row.get("name", "")),
+                            str(row.get("m", "")),
+                            str(row.get("c", "")),
+                            str(row.get("r_max", "")),
+                            str(row.get("R_max", "")),
+                        )
+                    )
 
         for instance_id in range(0, len(data_set)):
             instance = data_set[instance_id]
@@ -619,6 +633,12 @@ if __name__ == "__main__":
                         )
 
                     try:
+                        key = (str(name), str(m), str(c), str(r_max), str(R_max))
+                        if key in completed_runs:
+                            print(f"Skipping instance {instance} {r_max} {R_max} (already in summary.csv)")
+                            continue
+                        completed_runs.add(key)
+
                         print(f"Running instance {instance} {r_max} {R_max}")
                         process = subprocess.Popen(command, shell=True)
                         process.wait()
