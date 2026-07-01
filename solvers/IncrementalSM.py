@@ -15,8 +15,7 @@ import fileinput
 from tabulate import tabulate
 import webbrowser
 import sys
-from pysat.pb import PBEnc, EncType as PBEncType
-from pysat.card import CardEnc, EncType as CardEncType
+from pysat.pb import PBEnc, EncType
 import csv
 from typing import List, Dict, Any
 
@@ -271,115 +270,150 @@ def build_base_formula():
 
     valid_starts = []
 
-    # # (C1) ALO cho X
-    # for j in range(n):
-    #     emit([X[j][k] for k in range(m)])
-
-    # # (C2) AMO cho X
-    # for j in range(n):
-    #     for k1 in range(m):
-    #         for k2 in range(k1 + 1, m):
-    #             emit([-X[j][k1], -X[j][k2]])
-
-    # # (C3) ALO cho S và (C4) AMO cho S
+    # (C3+C4) Tính valid_starts cho mỗi task (ALO/AMO S dùng staircase bên dưới)
     for j, tj in enumerate(time_list):
         latest_start = horizon - tj
         starts = [t for t in range(latest_start + 1)]
         valid_starts.append(starts)
-        # emit([S[j][t] for t in starts])
-        # for t1 in range(len(starts)):
-        #     for t2 in range(t1 + 1, len(starts)):
-        #         emit([-S[j][starts[t1]], -S[j][starts[t2]]])
 
-    # (C1 + C2) Staircase encoding cho X va S
+    # (C1+C2) Staircase encoding cho X: ALO + AMO dùng biến phụ Y[j][k]
+    # Y[j][k] = true  ⟺  task j được gán vào máy k hoặc nhỏ hơn
     for j in range(n):
-        set_var(X[j][0],"Y",j,0)
-        for k in range(1,m-1):
-            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])
-            emit([-X[j][k], get_var("Y", j, k)])
-            emit([-X[j][k], -get_var("Y", j, k-1)])
-            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])
+        set_var(X[j][0], "Y", j, 0)
+        for k in range(1, m - 1):
+            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])   # Y[j][k-1] → Y[j][k]
+            emit([-X[j][k], get_var("Y", j, k)])                 # X[j][k] → Y[j][k]
+            emit([-X[j][k], -get_var("Y", j, k-1)])              # X[j][k] → ¬Y[j][k-1]
+            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])  # Y[j][k] → Y[j][k-1] ∨ X[j][k]
         # Last machine
         emit([get_var("Y", j, m-2), X[j][m-1]])
-        emit([-get_var("Y", j, m-2), -X[j][m-1]])  
+        emit([-get_var("Y", j, m-2), -X[j][m-1]])
     print("After var: ", var_counter)
-    
-    # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
-    for i, j in adj:
-        for k in range(m-1):
-            emit([-get_var("Y",j,k), -X[i][k+1]])
 
-    # T[j][t] represents "task j starts at time t or earlier"
+    # (C7) Precedence → machine order: nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    # Y[j][k] → ¬X[i][k+1]  ⟺  ¬Y[j][k] ∨ ¬X[i][k+1]
+    for i, j in adj:
+        for k in range(m - 1):
+            emit([-get_var("Y", j, k), -X[i][k+1]])
+
+    # (C3+C4) Staircase encoding cho S: ALO + AMO dùng biến phụ T[j][t]
+    # T[j][t] = true  ⟺  task j bắt đầu tại thời điểm t hoặc sớm hơn (prefix sum)
     for j in range(n):
-        last_t = horizon-time_list[j]
-        
-        # Special case: Full cycle tasks (only one feasible start time: t=0)
+        last_t = horizon - time_list[j]  # thời điểm bắt đầu muộn nhất hợp lệ
+
         if last_t == 0:
-            # Force the task to start at t=0 (equivalent to original constraint #4)
+            # Task chiếm toàn bộ horizon → chỉ có thể bắt đầu tại t=0
             emit([S[j][0]])
         else:
-            # First time slot
+            # t=0: T[j][0] ≡ S[j][0]
             set_var(S[j][0], "T", j, 0)
-            
-            # Intermediate time slots
+
+            # t=1..last_t-1: staircase trung gian
             for t in range(1, last_t):
-                emit([-get_var("T", j, t-1), get_var("T", j, t)]) # T[j][t-1] -> T[j][t]
-                emit([-S[j][t], get_var("T", j, t)]) # S[j][t] -> T[j][t]
-                emit([-S[j][t], -get_var("T", j, t-1)]) # S[j][t] -> ¬T[j][t-1]
-                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)]) # T[j][t] -> (T[j][t-1] ∨ S[j][t])
-            
-            # Last time slot (ensures at least one start time)
+                emit([-get_var("T", j, t-1), get_var("T", j, t)])              # T[j][t-1] → T[j][t]
+                emit([-S[j][t], get_var("T", j, t)])                            # S[j][t] → T[j][t]
+                emit([-S[j][t], -get_var("T", j, t-1)])                         # S[j][t] → ¬T[j][t-1]
+                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)])     # T[j][t] → T[j][t-1] ∨ S[j][t]
+
+            # t=last_t: buộc phải có ít nhất một điểm bắt đầu
             emit([get_var("T", j, last_t-1), S[j][last_t]])
             emit([-get_var("T", j, last_t-1), -S[j][last_t]])
 
 
-    # (C5) Nếu khởi động thì phải đang chạy đủ tj bước
+    # (C5) Hoạt động liên tục: S[j][t] → A[j][t], A[j][t+1], ..., A[j][t+tj-1]
+    # Nếu task j bắt đầu tại t thì nó phải đang chạy trong suốt tj bước tiếp theo
     for j, tj in enumerate(time_list):
         for t in valid_starts[j]:
             for eps in range(tj):
                 if t + eps < horizon:
                     emit([-S[j][t], A[j][t + eps]])
 
-    # (C6) Không chồng lấn trên cùng máy
+    # (C6a) Same-machine indicator — định nghĩa SM[i][j]:
+    # (X[i][k] ∧ X[j][k]) → SM[i][j]  ⟺  ¬X[i][k] ∨ ¬X[j][k] ∨ SM[i][j]
+    # Nếu cả i lẫn j cùng đặt trên máy k thì SM[i][j] = true
+    for k in range(m):
+        for i in range(n - 1):
+            for j in range(i + 1, n):
+                emit([-X[i][k], -X[j][k], get_var("SM", i, j)])
+
+    # (C6b) Same-machine indicator — phủ định SM[i][j] khi khác máy:
+    # (X[i][k] ∧ X[j][l]) → ¬SM[i][j]  (k ≠ l)  ⟺  ¬X[i][k] ∨ ¬X[j][l] ∨ ¬SM[i][j]
+    # Nếu i và j ở hai máy khác nhau thì SM[i][j] = false
     for i in range(n - 1):
         for j in range(i + 1, n):
             for k in range(m):
-                for t in range(horizon):
-                    emit([-X[i][k], -X[j][k], -A[i][t], -A[j][t]])
+                for l in range(m):
+                    if k == l:
+                        continue
+                    emit([-X[i][k], -X[j][l], -get_var("SM", i, j)])
 
-    # # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
-    # for i, j in adj:
-    #     for k in range(m):
-    #         for h in range(k + 1, m):
-    #             emit([-X[j][k], -X[i][h]])
+    # (C6c) Non-overlap khi cùng máy — dùng SM và staircase T:
+    # Chiều 1 (ràng buộc j theo thời điểm bắt đầu của i):
+    #   SM[i][j] ∧ S[i][t] → T[j][t - t_j] ∨ ¬T[j][t + t_i - 1]
+    #   Nghĩa: nếu cùng máy và i bắt đầu tại t thì j phải kết thúc trước t (T[j][t-tj])
+    #          hoặc j phải bắt đầu sau khi i kết thúc (¬T[j][t+ti-1])
+    # Chiều 2 (đối xứng — ràng buộc i theo thời điểm bắt đầu của j):
+    #   SM[i][j] ∧ S[j][t] → T[i][t - t_i] ∨ ¬T[i][t + t_j - 1]
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            last_j = horizon - time_list[j]  # chỉ số T tối đa hợp lệ cho task j
+            last_i = horizon - time_list[i]  # chỉ số T tối đa hợp lệ cho task i
 
-    # (C8) Trong cùng máy thì i không được bắt đầu sau j
-    # for i, j in adj:
-    #     for k in range(m):
-    #         for t1 in valid_starts[i]:
-    #             for t2 in valid_starts[j]:
-    #                 if t1 > t2:
-    #                     emit([-X[i][k], -X[j][k], -S[i][t1], -S[j][t2]])
+            # Chiều 1: ràng buộc j theo start của i
+            for t in range(horizon - time_list[i] + 1):
+                max_t_j = last_j - 1
+                clause = [-get_var("SM", i, j), -S[i][t]]
+                t_left = t - time_list[j]          # j kết thúc trước t nếu T[j][t_left] = true
+                if 0 <= t_left <= max_t_j:
+                    clause.append(get_var("T", j, t_left))
+                t_right = t + time_list[i] - 1    # j bắt đầu sau i kết thúc nếu ¬T[j][t_right]
+                if 0 <= t_right <= max_t_j:
+                    clause.append(-get_var("T", j, t_right))
+                if len(clause) > 2:
+                    emit(clause)
 
+            # Chiều 2: ràng buộc i theo start của j (đối xứng)
+            for t in range(horizon - time_list[j] + 1):
+                max_t_i = last_i - 1
+                clause = [-get_var("SM", i, j), -S[j][t]]
+                t_left = t - time_list[i]          # i kết thúc trước t nếu T[i][t_left] = true
+                if 0 <= t_left <= max_t_i:
+                    clause.append(get_var("T", i, t_left))
+                t_right = t + time_list[j] - 1    # i bắt đầu sau j kết thúc nếu ¬T[i][t_right]
+                if 0 <= t_right <= max_t_i:
+                    clause.append(-get_var("T", i, t_right))
+                if len(clause) > 2:
+                    emit(clause)
 
-    for i,j in adj:
+    # (C8) Precedence → time order: nếu i ≺ j và cùng máy k, thì i phải kết thúc trước j bắt đầu
+    # Dùng staircase T để encode: ¬X[i][k] ∨ ¬X[j][k] ∨ ¬T[j][t] ∨ ¬S[i][t_i]
+    # với t_i = t - t_i + 1 là thời điểm bắt đầu tương ứng của i để kết thúc đúng lúc t
+    for i, j in adj:
         for k in range(m):
+            left_bound = time_list[i] - 1           # j không thể bắt đầu trước t_i bước
+            right_bound = horizon - time_list[j]    # giới hạn phải của T[j]
 
-            left_bound = time_list[i] - 1
-            right_bound = horizon - time_list[j]
+            # T[j][left_bound] phải là false (j chưa thể bắt đầu ở vị trí này)
             emit([-X[i][k], -X[j][k], -get_var("T", j, left_bound)])
-            for t in range (left_bound + 1, right_bound):
-                t_i = t - time_list[i]+1
-                emit([-X[i][k], -X[j][k], -get_var("T", j, t), -S[i][t_i]])
-            for t in range (max(0,right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
-                emit([-X[i][k], -X[j][k], -S[i][t], -get_var("T",j,horizon-time_list[j]-1)])
 
-    # (C9) Nếu dùng tài nguyên r+1 thì phải dùng r
+            # Với t từ left_bound+1 đến right_bound-1
+            for t in range(left_bound + 1, right_bound):
+                t_i = t - time_list[i] + 1          # start của i để kết thúc tại t
+                emit([-X[i][k], -X[j][k], -get_var("T", j, t), -S[i][t_i]])
+
+            # T[j] đã đến cuối: ràng buộc S[i] không được bắt đầu quá muộn
+            for t in range(max(0, right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
+                emit([-X[i][k], -X[j][k], -S[i][t], -get_var("T", j, horizon - time_list[j] - 1)])
+
+    # (C9) Đơn điệu tài nguyên: R[k][r+1] → R[k][r]
+    # Nếu máy k dùng tài nguyên thứ r+1 thì phải đã dùng tài nguyên thứ r
     for k in range(m):
         for r in range(r_max - 1):
             emit([-R[k][r + 1], R[k][r]])
 
-    # (C10) Liên hệ cửa sổ khởi động với số tài nguyên máy
+    # (C10) Liên hệ cửa sổ khởi động với số tài nguyên máy:
+    # S[j][t] ∧ X[j][k] → R[k][q-1]  với q = ⌈(t + t_j) / c⌉
+    # Nếu task j bắt đầu tại t trên máy k thì máy k phải có đủ q tài nguyên
     for j, tj in enumerate(time_list):
         for k in range(m):
             for t in valid_starts[j]:
@@ -387,17 +421,19 @@ def build_base_formula():
                 if q <= r_max:
                     emit([-S[j][t], -X[j][k], R[k][q - 1]])
                 else:
-                    emit([-S[j][t], -X[j][k]])
+                    emit([-S[j][t], -X[j][k]])  # vô nghiệm: task không thể bắt đầu tại t
 
-    # (C11) Ngân sách tài nguyên toàn tuyến
+    # (C11) Ngân sách tài nguyên toàn tuyến: Σ R[k][r] ≤ R_max
     lits = []
+    weights = []
     for k in range(m):
         for r in range(r_max):
             lits.append(R[k][r])
-    card_enc = CardEnc.atmost(lits=lits, bound=R_max, top_id=var_counter, encoding=CardEncType.cardnetwrk)
-    for cl in card_enc.clauses:
+            weights.append(1)
+    enc = PBEnc.leq(lits=lits, weights=weights, bound=R_max, top_id=var_counter, encoding=EncType.binmerge)
+    for cl in enc.clauses:
         emit(cl)
-    var_counter = max(var_counter, card_enc.nv)
+    var_counter = max(var_counter, enc.nv)
 
 
     return solver, var_counter, horizon, base_clauses
@@ -588,7 +624,7 @@ def add_inagural(solver, peak):
                 lits.append(A[i][t+2*c])
                 weights.append(W[i])
         
-        enc = PBEnc.leq(lits=lits, weights=weights, bound=UB, top_id=top_id, encoding=PBEncType.binmerge)
+        enc = PBEnc.leq(lits=lits, weights=weights, bound=UB, top_id=top_id, encoding=EncType.binmerge)
 
         if enc.nv > var_counter:
             var_counter = enc.nv

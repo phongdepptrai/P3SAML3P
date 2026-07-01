@@ -712,17 +712,28 @@ if __name__ == "__main__":
 
             for r_max in range(1,4):
                 for R_max in range(m, r_max * m + 1):
-                    if is_wsl:
-                        # Already in WSL, run directly using absolute script path
-                        command = (
-                            f"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
-                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}"
-                        )
-                    else:
+                    import shutil
+                    use_wsl = False
+                    if sys.platform != 'linux' and shutil.which("wsl"):
+                        use_wsl = True
+
+                    if use_wsl:
                         # On Windows, call WSL, quoting absolute script path
                         command = (
                             "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
                             f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\""
+                        )
+                    else:
+                        # On Linux/macOS, run natively
+                        runlim_path = PROJECT_ROOT / "runlim"
+                        if runlim_path.exists():
+                            try:
+                                os.chmod(runlim_path, 0o755)
+                            except Exception:
+                                pass
+                        command = (
+                            f"cd '{PROJECT_ROOT}' && "
+                            f"./runlim -r {TIMEOUT} '{sys.executable}' '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}"
                         )
 
                     try:

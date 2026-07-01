@@ -13,7 +13,7 @@ if sys.platform != 'linux' and shutil.which("wsl"):
 if use_wsl:
     WSL_ROOT = "/mnt/c/Users/admin/Documents/Python/P3SAML3P"
     VENV_PY = f"{WSL_ROOT}/.venv_wsl/bin/python"
-    SCRIPT = f"{WSL_ROOT}/solvers/Atmostk.py"
+    SCRIPT = f"{WSL_ROOT}/solvers/IncrementalSM.py"
     bash_cmd = f"cd '{WSL_ROOT}' && '{VENV_PY}' '{SCRIPT}'"
     if len(sys.argv) > 1:
         args = " ".join(sys.argv[1:])
@@ -23,7 +23,7 @@ if use_wsl:
     result = subprocess.run(wsl_command)
     sys.exit(result.returncode)
 else:
-    SCRIPT = ROOT / "solvers" / "Atmostk.py"
+    SCRIPT = ROOT / "solvers" / "IncrementalSM.py"
     cmd = [sys.executable, str(SCRIPT)] + sys.argv[1:]
     print(f"Running natively: {' '.join(cmd)}")
     result = subprocess.run(cmd)
