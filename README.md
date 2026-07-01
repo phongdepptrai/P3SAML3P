@@ -1,47 +1,47 @@
 # P3SAML3P — SAT-based Assembly Line Balancing Solver
 
-Dự án giải bài toán **cân bằng dây chuyền lắp ráp (Assembly Line Balancing)** với ràng buộc tài nguyên, sử dụng nhiều chiến lược encode SAT/MaxSAT khác nhau. Mỗi phiên bản solver thử nghiệm một cách tiếp cận encode khác nhau để tối thiểu hoá **đỉnh tải (peak load)**.
+A project solving the **Assembly Line Balancing** problem with resource constraints, using various SAT/MaxSAT encoding strategies. Each solver version experiments with a different encoding approach to minimize the **peak load**.
 
 ---
 
-## Mục lục
+## Table of Contents
 
-- [Bài toán](#bài-toán)
-- [Cài đặt \& Chạy](#cài-đặt--chạy)
-- [Tóm tắt các phiên bản Solver](#tóm-tắt-các-phiên-bản-solver)
-- [Mô tả các Constraint](#mô-tả-các-constraint)
-- [Cấu trúc thư mục](#cấu-trúc-thư-mục)
-- [Định dạng Output](#định-dạng-output)
-- [Bộ dữ liệu](#bộ-dữ-liệu)
+- [Problem Description](#problem-description)
+- [Installation \& Running](#installation--running)
+- [Solver Versions Summary](#solver-versions-summary)
+- [Constraint Descriptions](#constraint-descriptions)
+- [Directory Structure](#directory-structure)
+- [Output Format](#output-format)
+- [Dataset](#dataset)
 
 ---
 
-## Bài toán
+## Problem Description
 
-Cho một đồ thị ưu tiên (precedence graph) gồm `n` task với thời gian thực hiện `t_j`, cần phân công mỗi task lên một trong `m` máy và xác định thời điểm bắt đầu `S[j]`, sao cho:
+Given a precedence graph consisting of `n` tasks with execution time `t_j`, each task needs to be assigned to one of `m` stations and its start time `S[j]` must be determined, such that:
 
-- Ràng buộc ưu tiên `i ≺ j` được thoả mãn (task i hoàn thành trước task j bắt đầu nếu cùng máy).
-- Không có hai task chồng lấn nhau trên cùng máy.
-- Tổng số resource được phân bổ không vượt quá ngân sách `R_max`.
-- **Tối thiểu hoá đỉnh tải** (peak load): giá trị lớn nhất của tổng `W[j]` trên mọi task j đang chạy tại cùng một pha thời gian.
+- Precedence constraints `i ≺ j` are satisfied (task i finishes before task j starts if they are on the same machine).
+- No two tasks overlap on the same machine.
+- The total allocated resources do not exceed the budget `R_max`.
+- **Minimize the peak load**: the maximum value of the sum of `W[j]` over all tasks j running at the same time slot.
 
-**Thông số:**
+**Parameters:**
 
-| Ký hiệu | Ý nghĩa |
+| Symbol | Meaning |
 |---|---|
-| `n` | Số task |
-| `m` | Số máy (stations) |
-| `c` | Chu kỳ (cycle time) |
-| `r_max` | Số resource tối đa mỗi máy |
-| `R_max` | Tổng resource toàn tuyến |
-| `W[j]` | Trọng số tải của task j |
-| `horizon` | Cửa sổ thời gian = `c × r_max` |
+| `n` | Number of tasks |
+| `m` | Number of stations |
+| `c` | Cycle time |
+| `r_max` | Maximum resources per station |
+| `R_max` | Total resources for the entire line |
+| `W[j]` | Load weight of task j |
+| `horizon` | Time horizon = `c × r_max` |
 
 ---
 
-## Cài đặt & Chạy
+## Installation & Running
 
-### 1. Tạo môi trường ảo
+### 1. Create a virtual environment
 
 ```bash
 python3 -m venv .venv
@@ -49,24 +49,24 @@ source .venv/bin/activate
 pip install python-sat tabulate pandas openpyxl pypblib
 ```
 
-### 2. Chạy qua launcher (menu chọn solver)
+### 2. Run via launcher (interactive solver selection menu)
 
 ```bash
 source .venv/bin/activate
 python run_launcher.py
 ```
 
-### 3. Chạy trực tiếp một solver
+### 3. Run a solver directly
 
 ```bash
-# Chạy toàn bộ bộ test (batch)
+# Run the entire test suite (batch)
 python solvers/<SolverName>.py
 
-# Chạy một instance cụ thể: <instance_id> <r_max> <R_max>
+# Run a specific instance: <instance_id> <r_max> <R_max>
 python solvers/<SolverName>.py 0 1 6
 ```
 
-### 4. Chạy qua runner script (có hỗ trợ runlim)
+### 4. Run via runner script (with runlim support)
 
 ```bash
 python runners/<SolverName>_run.py
@@ -74,73 +74,73 @@ python runners/<SolverName>_run.py
 
 ---
 
-## Tóm tắt các phiên bản Solver
+## Solver Versions Summary
 
-| Phiên bản | File | Chiến lược No-Overlap (C6) | Encode X/S | Intermediate log | Ghi chú |
+| Version | File | No-Overlap Strategy (C6) | X/S Encoding | Intermediate log | Notes |
 |---|---|---|---|---|---|
-| **base** | `solvers/base.py` | 4-literal A vars: `[-X[i][k],-X[j][k],-A[i][t],-A[j][t]]` | Staircase Y + Staircase T | ✅ | Phiên bản nền tảng, encode đơn giản nhất |
-| **Atmostk** | `solvers/Atmostk.py` | 4-literal A vars (giống base) | Staircase Y + Staircase T | ✅ | Thêm AtMostK encoding cho resource |
-| **Staircase13** | `solvers/Staircase13.py` | 4-literal A vars | Staircase Y + Staircase T | ✅ | Variant staircase, tên theo encoding |
-| **Incremental** | `solvers/Incremental.py` | 4-literal A vars + C8 bằng T vars | Staircase Y + Staircase T | ✅ | Thêm C8 tighten theo thời gian dùng T (prefix sum) |
-| **Inheritant** | `solvers/Inheritant.py` | 4-literal A vars + C8 bằng T vars | Staircase Y + Staircase T | ✅ | Tương tự Incremental, thêm ràng buộc kế thừa precedence |
-| **IncrementalSM** | `solvers/IncrementalSM.py` | **SM encoding** — biến phụ `SM[i][j]`, dùng T vars thay A vars | Staircase Y + Staircase T | ✅ | **Mới nhất** — loại bỏ A vars khỏi no-overlap |
-| **maxsat** | `solvers/maxsat.py` | 4-literal A vars | Staircase Y + Staircase T | ❌ | Dùng RC2 MaxSAT, không có intermediate |
+| **base** | `solvers/base.py` | 4-literal A vars: `[-X[i][k],-X[j][k],-A[i][t],-A[j][t]]` | Staircase Y + Staircase T | ✅ | Baseline version, simplest encoding |
+| **Atmostk** | `solvers/Atmostk.py` | 4-literal A vars (same as base) | Staircase Y + Staircase T | ✅ | Adds AtMostK encoding for resources |
+| **Staircase13** | `solvers/Staircase13.py` | 4-literal A vars | Staircase Y + Staircase T | ✅ | Staircase variant, named after the encoding |
+| **Incremental** | `solvers/Incremental.py` | 4-literal A vars + C8 using T vars | Staircase Y + Staircase T | ✅ | Adds C8 tightening over time using T (prefix sum) |
+| **Inheritant** | `solvers/Inheritant.py` | 4-literal A vars + C8 using T vars | Staircase Y + Staircase T | ✅ | Similar to Incremental, adds precedence inheritance constraints |
+| **IncrementalSM** | `solvers/IncrementalSM.py` | **SM encoding** — auxiliary variables `SM[i][j]`, uses T vars instead of A vars | Staircase Y + Staircase T | ✅ | **Latest** — removes A vars from no-overlap |
+| **maxsat** | `solvers/maxsat.py` | 4-literal A vars | Staircase Y + Staircase T | ❌ | Uses RC2 MaxSAT, no intermediate logging |
 
-### So sánh C6 No-Overlap — Số mệnh đề
+### Comparing C6 No-Overlap — Number of Clauses
 
-| Phiên bản | Constraint | Độ phức tạp | Loại literal |
+| Version | Constraint | Complexity | Literal type |
 |---|---|---|---|
 | base / Atmostk / Staircase / Incremental / Inheritant / maxsat | `[-X[i][k], -X[j][k], -A[i][t], -A[j][t]]` | O(n² × m × horizon) | 4-literal |
 | **IncrementalSM — C6a** | `[-X[i][k], -X[j][k], SM[i][j]]` | O(n² × m) | 3-literal |
 | **IncrementalSM — C6b** | `[-X[i][k], -X[j][l], -SM[i][j]]` (k≠l) | O(n² × m²) | 3-literal |
-| **IncrementalSM — C6c** | `[-SM[i][j], -S[i][t], ±T[j][...]]` (2 chiều) | O(n² × horizon) | 3-literal |
+| **IncrementalSM — C6c** | `[-SM[i][j], -S[i][t], ±T[j][...]]` (bidirectional) | O(n² × horizon) | 3-literal |
 
-### Chiến lược tối ưu hoá
+### Optimization Strategy
 
-| Phiên bản | Chiến lược |
+| Version | Strategy |
 |---|---|
-| base / Atmostk / Staircase / Incremental / Inheritant / IncrementalSM | Vòng lặp tuyến tính: thắt chặt dần bound, dùng INAGURAL ladder vars `U[i]` |
-| **maxsat** | Một lần gọi RC2 MaxSAT (pysat) — tối ưu trực tiếp, không có intermediate |
+| base / Atmostk / Staircase / Incremental / Inheritant / IncrementalSM | Linear loop: gradually tightening bounds, using INAGURAL ladder vars `U[i]` |
+| **maxsat** | Single call to RC2 MaxSAT (pysat) — direct optimization, no intermediate logging |
 
 ---
 
-## Mô tả các Constraint
+## Constraint Descriptions
 
-| Tên | Nội dung |
+| Name | Description |
 |---|---|
-| **C1+C2** | Staircase encoding cho X (ALO+AMO): mỗi task được gán đúng 1 máy, dùng biến phụ `Y[j][k]` |
-| **C3+C4** | Staircase encoding cho S (ALO+AMO): mỗi task có đúng 1 thời điểm bắt đầu, dùng biến phụ `T[j][t]` |
-| **C5** | Liên tục: `S[j][t] → A[j][t..t+tj-1]` — task chạy liên tục từ khi bắt đầu |
-| **C6** | No-overlap (các solver cũ): hai task cùng máy không chạy đồng thời, dùng A vars |
-| **C6a** | SM indicator định nghĩa: `(X[i][k] ∧ X[j][k]) → SM[i][j]` |
-| **C6b** | SM indicator phủ định: `(X[i][k] ∧ X[j][l]) → ¬SM[i][j]` với k≠l |
-| **C6c** | No-overlap dùng SM+T: `SM[i][j] ∧ S[i][t] → T[j][t-tj] ∨ ¬T[j][t+ti-1]` (2 chiều) |
-| **C7** | Precedence → thứ tự máy: `Y[j][k] → ¬X[i][k+1]` (nếu i≺j thì j không ở trạm sớm hơn i) |
-| **C8** | Precedence → thứ tự thời gian: nếu i≺j cùng máy, i phải kết thúc trước j bắt đầu (dùng T vars) |
-| **C9** | Đơn điệu resource: `R[k][r+1] → R[k][r]` |
-| **C10** | Liên hệ start-time với resource: `S[j][t] ∧ X[j][k] → R[k][q-1]` với q=⌈(t+tj)/c⌉ |
-| **C11** | Ngân sách resource toàn tuyến: `Σ R[k][r] ≤ R_max` (PBEnc BinMerge) |
-| **INAGURAL** | Ladder vars `U[i]` cho từng pha thời gian, dùng để tighten peak bound ở mỗi vòng lặp |
+| **C1+C2** | Staircase encoding for X (ALO+AMO): each task is assigned to exactly 1 machine, using auxiliary variables `Y[j][k]` |
+| **C3+C4** | Staircase encoding for S (ALO+AMO): each task has exactly 1 start time, using auxiliary variables `T[j][t]` |
+| **C5** | Continuity: `S[j][t] → A[j][t..t+tj-1]` — task runs continuously from start |
+| **C6** | No-overlap (legacy solvers): two tasks on the same machine cannot run simultaneously, using A variables |
+| **C6a** | SM indicator definition: `(X[i][k] ∧ X[j][k]) → SM[i][j]` |
+| **C6b** | SM indicator negation: `(X[i][k] ∧ X[j][l]) → ¬SM[i][j]` with k≠l |
+| **C6c** | No-overlap using SM+T: `SM[i][j] ∧ S[i][t] → T[j][t-tj] ∨ ¬T[j][t+ti-1]` (bidirectional) |
+| **C7** | Precedence → machine order: `Y[j][k] → ¬X[i][k+1]` (if i≺j, then j cannot be at an earlier station than i) |
+| **C8** | Precedence → temporal order: if i≺j on the same machine, i must finish before j starts (using T variables) |
+| **C9** | Resource monotonicity: `R[k][r+1] → R[k][r]` |
+| **C10** | Relation of start time to resources: `S[j][t] ∧ X[j][k] → R[k][q-1]` with q=⌈(t+tj)/c⌉ |
+| **C11** | Line-wide resource budget: `Σ R[k][r] ≤ R_max` (PBEnc BinMerge) |
+| **INAGURAL** | Ladder variables `U[i]` for each time phase, used to tighten peak bound in each loop iteration |
 
 ---
 
-## Cấu trúc thư mục
+## Directory Structure
 
 ```
 P3SAML3P/
 ├── README.md
-├── run_launcher.py          # Menu chọn và chạy solver
-├── generate_table.py        # Sinh bảng kết quả tổng hợp
-├── validate_schedule.py     # Kiểm tra tính đúng đắn của lịch trình
-├── runlim                   # Binary giám sát tài nguyên (Linux x86-64)
+├── run_launcher.py          # Solver selection menu and runner
+├── generate_table.py        # Generates summary results table
+├── validate_schedule.py     # Validates schedule correctness
+├── runlim                   # Resource monitoring binary (Linux x86-64)
 │
-├── solvers/                 # Các phiên bản solver
+├── solvers/                 # Solver versions
 │   ├── base.py
 │   ├── Atmostk.py
 │   ├── Staircase13.py
 │   ├── Incremental.py
 │   ├── Inheritant.py
-│   ├── IncrementalSM.py     # SM encoding — phiên bản mới nhất
+│   ├── IncrementalSM.py     # SM encoding — latest version
 │   └── maxsat.py
 │
 ├── runners/                 # Wrapper scripts (runlim + Linux/WSL dual support)
@@ -152,9 +152,9 @@ P3SAML3P/
 │   ├── IncrementalSM_run.py
 │   └── maxsat_run.py
 │
-├── presedent_graph/         # File input đồ thị ưu tiên (.IN2)
-├── official_task_power/     # File trọng số task (.txt)
-└── Output/                  # Kết quả chạy (tự sinh)
+├── presedent_graph/         # Precedence graph input files (.IN2)
+├── official_task_power/     # Task weight files (.txt)
+└── Output/                  # Run output (auto-generated)
     └── <SolverName>/
         ├── summary.csv
         ├── summary.xlsx
@@ -165,29 +165,29 @@ P3SAML3P/
 
 ---
 
-## Định dạng Output
+## Output Format
 
 ### `summary.csv` / `summary.xlsx`
 
-| Cột | Ý nghĩa |
+| Column | Meaning |
 |---|---|
-| `name` | Tên instance |
-| `n` / `m` / `c` | Số task / máy / chu kỳ |
-| `r_max` / `R_max` | Tham số resource |
-| `base_vars` | Số biến SAT cơ sở |
-| `base_clauses` | Số mệnh đề SAT cơ sở |
-| `peak` | Đỉnh tải tốt nhất tìm được |
-| `attempts` | Số vòng lặp tối ưu |
-| `runtime_sec` | Thời gian chạy (giây) |
+| `name` | Instance name |
+| `n` / `m` / `c` | Number of tasks / stations / cycle time |
+| `r_max` / `R_max` | Resource parameters |
+| `base_vars` | Number of base SAT variables |
+| `base_clauses` | Number of base SAT clauses |
+| `peak` | Best peak load found |
+| `attempts` | Number of optimization loops |
+| `runtime_sec` | Running time (seconds) |
 | `status` | `STARTED` / `FEASIBLE` / `INTERMEDIATE` / `OPTIMAL` / `TIMEOUT_INFEASIBLE` |
 
 ---
 
-## Bộ dữ liệu
+## Dataset
 
-Các instance từ bộ chuẩn SALBP, chạy với `r_max ∈ {1,2,3}` và `R_max ∈ [m, r_max × m]`:
+Instances from the standard SALBP dataset, run with `r_max ∈ {1,2,3}` and `R_max ∈ [m, r_max × m]`:
 
-| ID | Tên | m | c | Độ khó |
+| ID | Name | m | c | Difficulty |
 |---|---|---|---|---|
 | 0 | MERTENS | 6 | 6 | Easy |
 | 1 | MERTENS | 2 | 18 | Easy |
@@ -213,8 +213,8 @@ Các instance từ bộ chuẩn SALBP, chạy với `r_max ∈ {1,2,3}` và `R_m
 
 ```
 python-sat   # SAT solver (CaDiCaL195, RC2, PBEnc)
-tabulate     # Định dạng bảng terminal
-pandas       # Xuất Excel
-openpyxl     # Engine ghi .xlsx
+tabulate     # Terminal table formatting
+pandas       # Excel export
+openpyxl     # .xlsx writer engine
 pypblib      # Pseudo-Boolean encoding (PBEnc)
 ```

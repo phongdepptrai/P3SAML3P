@@ -281,7 +281,7 @@ def build_base_formula():
     #         for k2 in range(k1 + 1, m):
     #             emit([-X[j][k1], -X[j][k2]])
 
-    # # (C3) ALO cho S và (C4) AMO cho S
+    # (C3) ALO for S and (C4) AMO for S
     for j, tj in enumerate(time_list):
         latest_start = horizon - tj
         starts = [t for t in range(latest_start + 1)]
@@ -291,7 +291,7 @@ def build_base_formula():
         #     for t2 in range(t1 + 1, len(starts)):
         #         emit([-S[j][starts[t1]], -S[j][starts[t2]]])
 
-    # (C1 + C2) Staircase encoding cho X va S
+    # (C1 + C2) Staircase encoding for X and S
     for j in range(n):
         set_var(X[j][0],"Y",j,0)
         for k in range(1,m-1):
@@ -304,7 +304,7 @@ def build_base_formula():
         emit([-get_var("Y", j, m-2), -X[j][m-1]])  
     print("After var: ", var_counter)
     
-    # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    # (C7) If i ≺ j, then j cannot be at an earlier station than i
     for i, j in adj:
         for k in range(m-1):
             emit([-get_var("Y",j,k), -X[i][k+1]])
@@ -333,27 +333,27 @@ def build_base_formula():
             emit([-get_var("T", j, last_t-1), -S[j][last_t]])
 
 
-    # (C5) Nếu khởi động thì phải đang chạy đủ tj bước
+    # (C5) If started, it must run for tj steps
     for j, tj in enumerate(time_list):
         for t in valid_starts[j]:
             for eps in range(tj):
                 if t + eps < horizon:
                     emit([-S[j][t], A[j][t + eps]])
 
-    # (C6) Không chồng lấn trên cùng máy
+    # (C6) No overlap on the same machine
     for i in range(n - 1):
         for j in range(i + 1, n):
             for k in range(m):
                 for t in range(horizon):
                     emit([-X[i][k], -X[j][k], -A[i][t], -A[j][t]])
 
-    # # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    # # (C7) If i ≺ j, then j cannot be at an earlier station than i
     # for i, j in adj:
     #     for k in range(m):
     #         for h in range(k + 1, m):
     #             emit([-X[j][k], -X[i][h]])
 
-    # (C8) Trong cùng máy thì i không được bắt đầu sau j
+    # (C8) On the same machine, i cannot start after j
     # for i, j in adj:
     #     for k in range(m):
     #         for t1 in valid_starts[i]:
@@ -374,12 +374,12 @@ def build_base_formula():
             for t in range (max(0,right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
                 emit([-X[i][k], -X[j][k], -S[i][t], -get_var("T",j,horizon-time_list[j]-1)])
 
-    # (C9) Nếu dùng tài nguyên r+1 thì phải dùng r
+    # (C9) If resource r+1 is used, then r must be used
     for k in range(m):
         for r in range(r_max - 1):
             emit([-R[k][r + 1], R[k][r]])
 
-    # (C10) Liên hệ cửa sổ khởi động với số tài nguyên máy
+    # (C10) Relate start window to machine resources
     for j, tj in enumerate(time_list):
         for k in range(m):
             for t in valid_starts[j]:
@@ -389,7 +389,7 @@ def build_base_formula():
                 else:
                     emit([-S[j][t], -X[j][k]])
 
-    # (C11) Ngân sách tài nguyên toàn tuyến
+    # (C11) Resource budget of the entire line
     lits = []
     for k in range(m):
         for r in range(r_max):

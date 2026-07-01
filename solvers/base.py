@@ -242,7 +242,7 @@ def build_base_formula():
             for k2 in range(k1 + 1, m):
                 emit([-X[j][k1], -X[j][k2]])
 
-    # (C3) ALO cho S và (C4) AMO cho S
+    # (C3) ALO for S and (C4) AMO for S
     for j, tj in enumerate(time_list):
         latest_start = horizon - tj
         starts = [t for t in range(latest_start + 1)]
@@ -252,27 +252,27 @@ def build_base_formula():
             for t2 in range(t1 + 1, len(starts)):
                 emit([-S[j][starts[t1]], -S[j][starts[t2]]])
 
-    # (C5) Nếu khởi động thì phải đang chạy đủ tj bước
+    # (C5) If started, it must run for tj steps
     for j, tj in enumerate(time_list):
         for t in valid_starts[j]:
             for eps in range(tj):
                 if t + eps < horizon:
                     emit([-S[j][t], A[j][t + eps]])
 
-    # (C6) Không chồng lấn trên cùng máy
+    # (C6) No overlap on the same machine
     for i in range(n - 1):
         for j in range(i + 1, n):
             for k in range(m):
                 for t in range(horizon):
                     emit([-X[i][k], -X[j][k], -A[i][t], -A[j][t]])
 
-    # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    # (C7) If i ≺ j, then j cannot be at an earlier station than i
     for i, j in adj:
         for k in range(m):
             for h in range(k + 1, m):
                 emit([-X[j][k], -X[i][h]])
 
-    # (C8) Trong cùng máy thì i không được bắt đầu sau j
+    # (C8) On the same machine, i cannot start after j
     for i, j in adj:
         for k in range(m):
             for t1 in valid_starts[i]:
@@ -280,12 +280,12 @@ def build_base_formula():
                     if t1 > t2:
                         emit([-X[i][k], -X[j][k], -S[i][t1], -S[j][t2]])
 
-    # (C9) Nếu dùng tài nguyên r+1 thì phải dùng r
+    # (C9) If resource r+1 is used, then r must be used
     for k in range(m):
         for r in range(r_max - 1):
             emit([-R[k][r + 1], R[k][r]])
 
-    # (C10) Liên hệ cửa sổ khởi động với số tài nguyên máy
+    # (C10) Relate start window to machine resources
     for j, tj in enumerate(time_list):
         for k in range(m):
             for t in valid_starts[j]:
@@ -295,7 +295,7 @@ def build_base_formula():
                 else:
                     emit([-S[j][t], -X[j][k]])
 
-    # (C11) Ngân sách tài nguyên toàn tuyến
+    # (C11) Resource budget of the entire line
     lits = []
     weights = []
     for k in range(m):

@@ -270,14 +270,14 @@ def build_base_formula():
 
     valid_starts = []
 
-    # (C3+C4) Tính valid_starts cho mỗi task (ALO/AMO S dùng staircase bên dưới)
+    # (C3+C4) Calculate valid_starts for each task (ALO/AMO S uses staircase below)
     for j, tj in enumerate(time_list):
         latest_start = horizon - tj
         starts = [t for t in range(latest_start + 1)]
         valid_starts.append(starts)
 
-    # (C1+C2) Staircase encoding cho X: ALO + AMO dùng biến phụ Y[j][k]
-    # Y[j][k] = true  ⟺  task j được gán vào máy k hoặc nhỏ hơn
+    # (C1+C2) Staircase encoding for X: ALO + AMO using auxiliary variable Y[j][k]
+    # Y[j][k] = true  ⟺  task j is assigned to station k or lower
     for j in range(n):
         set_var(X[j][0], "Y", j, 0)
         for k in range(1, m - 1):
@@ -290,55 +290,55 @@ def build_base_formula():
         emit([-get_var("Y", j, m-2), -X[j][m-1]])
     print("After var: ", var_counter)
 
-    # (C7) Precedence → machine order: nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    # (C7) Precedence → machine order: if i ≺ j, then j cannot be at an earlier station than i
     # Y[j][k] → ¬X[i][k+1]  ⟺  ¬Y[j][k] ∨ ¬X[i][k+1]
     for i, j in adj:
         for k in range(m - 1):
             emit([-get_var("Y", j, k), -X[i][k+1]])
 
-    # (C3+C4) Staircase encoding cho S: ALO + AMO dùng biến phụ T[j][t]
-    # T[j][t] = true  ⟺  task j bắt đầu tại thời điểm t hoặc sớm hơn (prefix sum)
+    # (C3+C4) Staircase encoding for S: ALO + AMO using auxiliary variable T[j][t]
+    # T[j][t] = true  ⟺  task j starts at time t or earlier (prefix sum)
     for j in range(n):
-        last_t = horizon - time_list[j]  # thời điểm bắt đầu muộn nhất hợp lệ
+        last_t = horizon - time_list[j]  # latest valid start time
 
         if last_t == 0:
-            # Task chiếm toàn bộ horizon → chỉ có thể bắt đầu tại t=0
+            # Task takes up the entire horizon → can only start at t=0
             emit([S[j][0]])
         else:
             # t=0: T[j][0] ≡ S[j][0]
             set_var(S[j][0], "T", j, 0)
 
-            # t=1..last_t-1: staircase trung gian
+            # t=1..last_t-1: intermediate staircase slots
             for t in range(1, last_t):
                 emit([-get_var("T", j, t-1), get_var("T", j, t)])              # T[j][t-1] → T[j][t]
                 emit([-S[j][t], get_var("T", j, t)])                            # S[j][t] → T[j][t]
                 emit([-S[j][t], -get_var("T", j, t-1)])                         # S[j][t] → ¬T[j][t-1]
                 emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)])     # T[j][t] → T[j][t-1] ∨ S[j][t]
 
-            # t=last_t: buộc phải có ít nhất một điểm bắt đầu
+            # t=last_t: must have at least one start time
             emit([get_var("T", j, last_t-1), S[j][last_t]])
             emit([-get_var("T", j, last_t-1), -S[j][last_t]])
 
 
-    # (C5) Hoạt động liên tục: S[j][t] → A[j][t], A[j][t+1], ..., A[j][t+tj-1]
-    # Nếu task j bắt đầu tại t thì nó phải đang chạy trong suốt tj bước tiếp theo
+    # (C5) Continuity: S[j][t] → A[j][t], A[j][t+1], ..., A[j][t+tj-1]
+    # If task j starts at t, it must run for the next tj steps
     for j, tj in enumerate(time_list):
         for t in valid_starts[j]:
             for eps in range(tj):
                 if t + eps < horizon:
                     emit([-S[j][t], A[j][t + eps]])
 
-    # (C6a) Same-machine indicator — định nghĩa SM[i][j]:
+    # (C6a) Same-machine indicator — definition of SM[i][j]:
     # (X[i][k] ∧ X[j][k]) → SM[i][j]  ⟺  ¬X[i][k] ∨ ¬X[j][k] ∨ SM[i][j]
-    # Nếu cả i lẫn j cùng đặt trên máy k thì SM[i][j] = true
+    # If both i and j are assigned to station k, then SM[i][j] = true
     for k in range(m):
         for i in range(n - 1):
             for j in range(i + 1, n):
                 emit([-X[i][k], -X[j][k], get_var("SM", i, j)])
 
-    # (C6b) Same-machine indicator — phủ định SM[i][j] khi khác máy:
+    # (C6b) Same-machine indicator — negation of SM[i][j] when on different stations:
     # (X[i][k] ∧ X[j][l]) → ¬SM[i][j]  (k ≠ l)  ⟺  ¬X[i][k] ∨ ¬X[j][l] ∨ ¬SM[i][j]
-    # Nếu i và j ở hai máy khác nhau thì SM[i][j] = false
+    # If i and j are on different stations, then SM[i][j] = false
     for i in range(n - 1):
         for j in range(i + 1, n):
             for k in range(m):
@@ -347,73 +347,73 @@ def build_base_formula():
                         continue
                     emit([-X[i][k], -X[j][l], -get_var("SM", i, j)])
 
-    # (C6c) Non-overlap khi cùng máy — dùng SM và staircase T:
-    # Chiều 1 (ràng buộc j theo thời điểm bắt đầu của i):
+    # (C6c) Non-overlap on the same station — using SM and staircase T:
+    # Direction 1 (constraining j based on the start time of i):
     #   SM[i][j] ∧ S[i][t] → T[j][t - t_j] ∨ ¬T[j][t + t_i - 1]
-    #   Nghĩa: nếu cùng máy và i bắt đầu tại t thì j phải kết thúc trước t (T[j][t-tj])
-    #          hoặc j phải bắt đầu sau khi i kết thúc (¬T[j][t+ti-1])
-    # Chiều 2 (đối xứng — ràng buộc i theo thời điểm bắt đầu của j):
+    #   Meaning: if on the same station and i starts at t, then j must finish before t (T[j][t-tj])
+    #            or j must start after i finishes (¬T[j][t+ti-1])
+    # Direction 2 (symmetric — constraining i based on the start time of j):
     #   SM[i][j] ∧ S[j][t] → T[i][t - t_i] ∨ ¬T[i][t + t_j - 1]
     for i in range(n - 1):
         for j in range(i + 1, n):
-            last_j = horizon - time_list[j]  # chỉ số T tối đa hợp lệ cho task j
-            last_i = horizon - time_list[i]  # chỉ số T tối đa hợp lệ cho task i
+            last_j = horizon - time_list[j]  # maximum valid T index for task j
+            last_i = horizon - time_list[i]  # maximum valid T index for task i
 
-            # Chiều 1: ràng buộc j theo start của i
+            # Direction 1: constrain j based on start of i
             for t in range(horizon - time_list[i] + 1):
                 max_t_j = last_j - 1
                 clause = [-get_var("SM", i, j), -S[i][t]]
-                t_left = t - time_list[j]          # j kết thúc trước t nếu T[j][t_left] = true
+                t_left = t - time_list[j]          # j finishes before t if T[j][t_left] = true
                 if 0 <= t_left <= max_t_j:
                     clause.append(get_var("T", j, t_left))
-                t_right = t + time_list[i] - 1    # j bắt đầu sau i kết thúc nếu ¬T[j][t_right]
+                t_right = t + time_list[i] - 1    # j starts after i finishes if ¬T[j][t_right]
                 if 0 <= t_right <= max_t_j:
                     clause.append(-get_var("T", j, t_right))
                 if len(clause) > 2:
                     emit(clause)
 
-            # Chiều 2: ràng buộc i theo start của j (đối xứng)
+            # Direction 2: constrain i based on start of j (symmetric)
             for t in range(horizon - time_list[j] + 1):
                 max_t_i = last_i - 1
                 clause = [-get_var("SM", i, j), -S[j][t]]
-                t_left = t - time_list[i]          # i kết thúc trước t nếu T[i][t_left] = true
+                t_left = t - time_list[i]          # i finishes before t if T[i][t_left] = true
                 if 0 <= t_left <= max_t_i:
                     clause.append(get_var("T", i, t_left))
-                t_right = t + time_list[j] - 1    # i bắt đầu sau j kết thúc nếu ¬T[i][t_right]
+                t_right = t + time_list[j] - 1    # i starts after j finishes if ¬T[i][t_right]
                 if 0 <= t_right <= max_t_i:
                     clause.append(-get_var("T", i, t_right))
                 if len(clause) > 2:
                     emit(clause)
 
-    # (C8) Precedence → time order: nếu i ≺ j và cùng máy k, thì i phải kết thúc trước j bắt đầu
-    # Dùng staircase T để encode: ¬X[i][k] ∨ ¬X[j][k] ∨ ¬T[j][t] ∨ ¬S[i][t_i]
-    # với t_i = t - t_i + 1 là thời điểm bắt đầu tương ứng của i để kết thúc đúng lúc t
+    # (C8) Precedence → time order: if i ≺ j and on the same station k, then i must finish before j starts
+    # Use staircase T to encode: ¬X[i][k] ∨ ¬X[j][k] ∨ ¬T[j][t] ∨ ¬S[i][t_i]
+    # with t_i = t - t_i + 1 being the corresponding start time of i to finish at t
     for i, j in adj:
         for k in range(m):
-            left_bound = time_list[i] - 1           # j không thể bắt đầu trước t_i bước
-            right_bound = horizon - time_list[j]    # giới hạn phải của T[j]
+            left_bound = time_list[i] - 1           # j cannot start before t_i steps
+            right_bound = horizon - time_list[j]    # right bound of T[j]
 
-            # T[j][left_bound] phải là false (j chưa thể bắt đầu ở vị trí này)
+            # T[j][left_bound] must be false (j cannot start at this position yet)
             emit([-X[i][k], -X[j][k], -get_var("T", j, left_bound)])
 
-            # Với t từ left_bound+1 đến right_bound-1
+            # For t from left_bound+1 to right_bound-1
             for t in range(left_bound + 1, right_bound):
-                t_i = t - time_list[i] + 1          # start của i để kết thúc tại t
+                t_i = t - time_list[i] + 1          # start of i to finish at t
                 emit([-X[i][k], -X[j][k], -get_var("T", j, t), -S[i][t_i]])
 
-            # T[j] đã đến cuối: ràng buộc S[i] không được bắt đầu quá muộn
+            # T[j] reached the end: constrain S[i] not to start too late
             for t in range(max(0, right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
                 emit([-X[i][k], -X[j][k], -S[i][t], -get_var("T", j, horizon - time_list[j] - 1)])
 
-    # (C9) Đơn điệu tài nguyên: R[k][r+1] → R[k][r]
-    # Nếu máy k dùng tài nguyên thứ r+1 thì phải đã dùng tài nguyên thứ r
+    # (C9) Resource monotonicity: R[k][r+1] → R[k][r]
+    # If station k uses the (r+1)-th resource, then it must have used the r-th resource
     for k in range(m):
         for r in range(r_max - 1):
             emit([-R[k][r + 1], R[k][r]])
 
-    # (C10) Liên hệ cửa sổ khởi động với số tài nguyên máy:
-    # S[j][t] ∧ X[j][k] → R[k][q-1]  với q = ⌈(t + t_j) / c⌉
-    # Nếu task j bắt đầu tại t trên máy k thì máy k phải có đủ q tài nguyên
+    # (C10) Relation of start window to machine resources:
+    # S[j][t] ∧ X[j][k] → R[k][q-1]  with q = ⌈(t + t_j) / c⌉
+    # If task j starts at t on station k, then station k must have at least q resources
     for j, tj in enumerate(time_list):
         for k in range(m):
             for t in valid_starts[j]:
@@ -421,9 +421,9 @@ def build_base_formula():
                 if q <= r_max:
                     emit([-S[j][t], -X[j][k], R[k][q - 1]])
                 else:
-                    emit([-S[j][t], -X[j][k]])  # vô nghiệm: task không thể bắt đầu tại t
+                    emit([-S[j][t], -X[j][k]])  # unsatisfiable: task cannot start at t
 
-    # (C11) Ngân sách tài nguyên toàn tuyến: Σ R[k][r] ≤ R_max
+    # (C11) Line-wide resource budget: Σ R[k][r] ≤ R_max
     lits = []
     weights = []
     for k in range(m):
