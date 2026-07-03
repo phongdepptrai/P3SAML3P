@@ -49,6 +49,7 @@ DATA_DIR = PROJECT_ROOT / "presedent_graph"
 POWER_DIR = PROJECT_ROOT / "official_task_power"
 var_map = {}
 var_counter = 0
+WRITE_HTML = True  # Set to False via --no-html flag to skip HTML schedule output
 
 def flush_summary():
     """Write summary rows replacing any existing entry with the same key."""
@@ -403,7 +404,7 @@ def build_base_formula():
 
             # T[j] reached the end: constrain S[i] not to start too late
             for t in range(max(0, right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
-                emit([-X[i][k], -X[j][k], -S[i][t], -get_var("T", j, horizon - time_list[j] - 1)])
+                emit([-X[i][k], -X[j][k], -S[i][t]])
 
     # (C9) Resource monotonicity: R[k][r+1] → R[k][r]
     # If station k uses the (r+1)-th resource, then it must have used the r-th resource
@@ -719,11 +720,12 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
             base_vars=var_counter,
             base_clause_count=base_clause_count,
         )
-        outfile = write_html_schedule(
-            name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
-        )
-        if outfile:
-            print(f"HTML schedule (intermediate) written to {outfile}")
+        if WRITE_HTML:
+            outfile = write_html_schedule(
+                name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
+            )
+            if outfile:
+                print(f"HTML schedule (intermediate) written to {outfile}")
         best_model = model
         best_peak = peak_found
         idx = best_peak - LB - 1
@@ -735,9 +737,10 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     runtime = time.time() - t_start
     print(f"Best peak: {best_peak} | runtime: {runtime:.3f}s")
     print(summarize_solution(best_model, horizon))
-    outfile = write_html_schedule(name, m, c, r_max, R_max, best_model, horizon, best_peak, runtime)
-    if outfile:
-        print(f"HTML schedule written to {outfile}")
+    if WRITE_HTML:
+        outfile = write_html_schedule(name, m, c, r_max, R_max, best_model, horizon, best_peak, runtime)
+        if outfile:
+            print(f"HTML schedule written to {outfile}")
 
     # Final OPTIMAL snapshot (or best found)
     add_summary_row(
@@ -753,7 +756,12 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
 if __name__ == "__main__":
     # Detect if running in WSL
     is_wsl = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
-    
+
+    # Parse --no-html flag (can appear anywhere in argv)
+    if "--no-html" in sys.argv:
+        WRITE_HTML = False
+        sys.argv = [a for a in sys.argv if a != "--no-html"]
+
     if len(sys.argv) == 1:
         print("Run all tests")
         TIMEOUT = 3600
