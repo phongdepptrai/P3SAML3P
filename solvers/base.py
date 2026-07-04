@@ -161,6 +161,15 @@ data_set = [
     ["SAWYER", 7, 47],      # 16
 ]
 
+test_data_set = [
+    ["MERTENS", 6, 6],
+    ["MANSOOR", 4, 48],
+    ["MITCHELL", 8, 14],
+    ["BUXEY", 14, 25],
+    ["SAWYER", 14, 25],
+]
+
+
 def refresh_globals():
     global time_list, adj, neighbors, reversed_neighbors, W
     time_list = []
@@ -593,6 +602,11 @@ if __name__ == "__main__":
     # Detect if running in WSL
     is_wsl = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
     
+    
+    is_test = False
+    if "--test" in sys.argv:
+        is_test = True
+        sys.argv = [a for a in sys.argv if a != "--test"]
     if len(sys.argv) == 1:
         print("Run all tests")
         TIMEOUT = 3600
@@ -611,8 +625,9 @@ if __name__ == "__main__":
                         )
                     )
 
-        for instance_id in range(0, len(data_set)):
-            instance = data_set[instance_id]
+        current_data_set = test_data_set if is_test else data_set
+        for instance_id in range(0, len(current_data_set)):
+            instance = current_data_set[instance_id]
             name = instance[0]
             m = instance[1]
             c = instance[2]
@@ -628,7 +643,7 @@ if __name__ == "__main__":
                         # On Windows, call WSL (absolute path)
                         command = (
                             "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
-                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\""
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\"" + (" --test" if is_test else "")
                         )
                     else:
                         # On Linux/macOS, run natively
@@ -640,7 +655,7 @@ if __name__ == "__main__":
                                 pass
                         command = (
                             f"cd '{PROJECT_ROOT}' && "
-                            f"./runlim -r {TIMEOUT} '{sys.executable}' '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}"
+                            f"./runlim -r {TIMEOUT} '{sys.executable}' '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}" + (" --test" if is_test else "")
                         )
 
                     try:
@@ -665,7 +680,8 @@ if __name__ == "__main__":
         r_max_param = int(sys.argv[2])
         R_max_param = int(sys.argv[3])
 
-        instance = data_set[instance_id]
+        current_data_set = test_data_set if is_test else data_set
+        instance = current_data_set[instance_id]
         name_param = instance[0]
         m_param = instance[1]
         c_param = instance[2]

@@ -166,6 +166,15 @@ data_set = [
     ["SAWYER", 7, 47],      # 16
 ]
 
+test_data_set = [
+    ["MERTENS", 6, 6],
+    ["MANSOOR", 4, 48],
+    ["MITCHELL", 8, 14],
+    ["BUXEY", 14, 25],
+    ["SAWYER", 14, 25],
+]
+
+
 def refresh_globals():
     global time_list, adj, neighbors, reversed_neighbors, W, X, S, A, R, n, m, c, r_max, R_max, var_map, var_counter, best_model, best_peak
     time_list = []
@@ -685,12 +694,11 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
             base_clause_count=base_clause_count,
         )
         if WRITE_HTML:
-    if WRITE_HTML:
-        outfile = write_html_schedule(
-            name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
-        )
+            outfile = write_html_schedule(
+                name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
+            )
             if outfile:
-            print(f"HTML schedule (intermediate) written to {outfile}")
+                print(f"HTML schedule (intermediate) written to {outfile}")
         best_model = model
         best_peak = peak_found
         idx = best_peak - LB - 1
@@ -703,7 +711,7 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     print(f"Best peak: {best_peak} | runtime: {runtime:.3f}s")
     print(summarize_solution(best_model, horizon))
     outfile = write_html_schedule(name, m, c, r_max, R_max, best_model, horizon, best_peak, runtime)
-        if outfile:
+    if outfile:
         print(f"HTML schedule written to {outfile}")
 
     # Final OPTIMAL snapshot (or best found)
@@ -726,6 +734,11 @@ if __name__ == "__main__":
         WRITE_HTML = False
         sys.argv = [a for a in sys.argv if a != "--no-html"]
 
+    
+    is_test = False
+    if "--test" in sys.argv:
+        is_test = True
+        sys.argv = [a for a in sys.argv if a != "--test"]
     if len(sys.argv) == 1:
         print("Run all tests")
         TIMEOUT = 3600
@@ -744,8 +757,9 @@ if __name__ == "__main__":
                         )
                     )
 
-        for instance_id in range(0, len(data_set)):
-            instance = data_set[instance_id]
+        current_data_set = test_data_set if is_test else data_set
+        for instance_id in range(0, len(current_data_set)):
+            instance = current_data_set[instance_id]
             name = instance[0]
             m = instance[1]
             c = instance[2]
@@ -761,7 +775,7 @@ if __name__ == "__main__":
                         # On Windows, call WSL, quoting absolute script path
                         command = (
                             "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
-                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\""
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\"" + (" --test" if is_test else "")
                         )
                     else:
                         # On Linux/macOS, run natively
@@ -773,7 +787,7 @@ if __name__ == "__main__":
                                 pass
                         command = (
                             f"cd '{PROJECT_ROOT}' && "
-                            f"./runlim -r {TIMEOUT} '{sys.executable}' '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}"
+                            f"./runlim -r {TIMEOUT} '{sys.executable}' '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}" + (" --test" if is_test else "")
                         )
 
                     try:
@@ -798,7 +812,8 @@ if __name__ == "__main__":
         r_max_param = int(sys.argv[2])
         R_max_param = int(sys.argv[3])
 
-        instance = data_set[instance_id]
+        current_data_set = test_data_set if is_test else data_set
+        instance = current_data_set[instance_id]
         name_param = instance[0]
         m_param = instance[1]
         c_param = instance[2]

@@ -150,21 +150,24 @@ def build_stats(rows):
     avg_row = {}
     for key in [1, 2, 3, "total"]:
         cpus, feas_vals, opt_vals, gaps = [], [], [], []
+        has_stats = False
         for inst_key in stats:
             if key not in stats[inst_key]:
                 continue
             s = stats[inst_key][key]
             if s is None:
                 continue
-            cpus.append(s["cpu"])
+            has_stats = True
+            if s["cpu"] is not None:
+                cpus.append(s["cpu"])
             feas_vals.append(s["feas_pct"])
             opt_vals.append(s["opt_pct"])
             if s["gap"] is not None:
                 gaps.append(s["gap"])
-        if cpus:
+        if has_stats:
             avg_row[key] = {
                 "gap": mean(gaps) if gaps else None,
-                "cpu": mean(cpus),
+                "cpu": mean(cpus) if cpus else None,
                 "feas_pct": mean(feas_vals),
                 "opt_pct": mean(opt_vals),
             }

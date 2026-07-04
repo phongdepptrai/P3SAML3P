@@ -62,6 +62,9 @@ python run_launcher.py
 # Run the entire test suite (batch)
 python solvers/<SolverName>.py
 
+# Run a quick representative test subset (Easy, Medium, Hard)
+python solvers/<SolverName>.py --test
+
 # Run a specific instance: <instance_id> <r_max> <R_max>
 python solvers/<SolverName>.py 0 1 6
 ```
