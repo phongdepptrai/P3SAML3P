@@ -33,3 +33,18 @@ python3 solvers/Atmostk.py --test
 
 - Always run a `--test` benchmark after making core changes to constraint formulations (e.g. `SM[i][j]`, staircases) to ensure they are satisfiable and computationally sound before launching full overnight benchmarks.
 - Use `screen` if you still want to detach from the test run, though test runs typically finish in a few minutes.
+
+## Orphaned Process Prevention (CRITICAL)
+
+When you (the agent) run a test in the background, you **MUST NOT** leave it running indefinitely and forget about it. Furthermore, **DO NOT** use task cancellation (`manage_task kill`) or `killall runlim` to abort tests!
+Standard task cancellation will leave `runlim` child processes **orphaned** to corrupt the output. Using `killall` is dangerous because it will kill the USER's background processes too!
+
+**To safely do a quick dry-run without affecting the user's processes:**
+Launch the test in a new process group using `setsid`, let it run, and then kill its specific process group (`-$PGID`). This guarantees the entire process tree (including `runlim` and its children) is cleanly wiped out, without touching the user's manual runs.
+
+Use the `run_command` tool to run a one-liner like this:
+```bash
+# Example: Run for 30 seconds, then kill the entire process group cleanly
+setsid .venv/bin/python3 solvers/IncrementalSM.py --test > test_dry_run.log 2>&1 & PGID=$!; sleep 30; kill -TERM -$PGID
+```
+After it completes, use `view_file` to read `test_dry_run.log` and verify the syntax/logic.
