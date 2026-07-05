@@ -16,8 +16,6 @@ from tabulate import tabulate
 import webbrowser
 import sys
 from pysat.pb import PBEnc, EncType
-from pysat.examples.rc2 import RC2
-from pysat.formula import WCNF
 import csv
 from typing import List, Dict, Any
 
@@ -193,6 +191,24 @@ def refresh_globals():
     var_map = {}
     
 
+def compute_transitive_closure():
+    """Compute transitive closure of the precedence graph (E*)."""
+    global adj, neighbors, reversed_neighbors
+    # Floyd-Warshall reachability
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                if i != j and neighbors[i][k] and neighbors[k][j]:
+                    neighbors[i][j] = 1
+                    reversed_neighbors[j][i] = 1
+
+    # Rebuild adj list representing E*
+    adj.clear()
+    for i in range(n):
+        for j in range(n):
+            if neighbors[i][j]:
+                adj.append([i, j])
+
 def read_input(name):
     cnt = 0
     global n, time_list, adj, neighbors, reversed_neighbors
@@ -214,6 +230,7 @@ def read_input(name):
                     else:
                         break
                 cnt = cnt + 1
+    compute_transitive_closure()
 
 def load_power(name):
     """Read task power values for the given instance name."""
@@ -276,123 +293,150 @@ def build_base_formula():
         base_clauses.append(clause)
         solver.add_clause(clause)
 
-    # # Quick infeasibility: if any task longer than horizon, force UNSAT.
-    # for task_id, duration in enumerate(time_list):
-    #     if duration > horizon:
-    #         emit([1, -1])
-    #         return solver, var_counter, horizon, base_clauses
-
     valid_starts = []
 
-    # # (C1) ALO cho X
-    # for j in range(n):
-    #     emit([X[j][k] for k in range(m)])
-
-    # # (C2) AMO cho X
-    # for j in range(n):
-    #     for k1 in range(m):
-    #         for k2 in range(k1 + 1, m):
-    #             emit([-X[j][k1], -X[j][k2]])
-
-    # (C3) ALO for S and (C4) AMO for S
+    # (C3+C4) Calculate valid_starts for each task (ALO/AMO S uses staircase below)
     for j, tj in enumerate(time_list):
         latest_start = horizon - tj
         starts = [t for t in range(latest_start + 1)]
         valid_starts.append(starts)
-        # emit([S[j][t] for t in starts])
-        # for t1 in range(len(starts)):
-        #     for t2 in range(t1 + 1, len(starts)):
-        #         emit([-S[j][starts[t1]], -S[j][starts[t2]]])
 
-    # (C1 + C2) Staircase encoding for X and S
+    # (C1+C2) Staircase encoding for X: ALO + AMO using auxiliary variable Y[j][k]
+    # Y[j][k] = true  ⟺  task j is assigned to station k or lower
     for j in range(n):
-        set_var(X[j][0],"Y",j,0)
-        for k in range(1,m-1):
-            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])
-            emit([-X[j][k], get_var("Y", j, k)])
-            emit([-X[j][k], -get_var("Y", j, k-1)])
-            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])
+        set_var(X[j][0], "Y", j, 0)
+        for k in range(1, m - 1):
+            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])   # Y[j][k-1] → Y[j][k]
+            emit([-X[j][k], get_var("Y", j, k)])                 # X[j][k] → Y[j][k]
+            emit([-X[j][k], -get_var("Y", j, k-1)])              # X[j][k] → ¬Y[j][k-1]
+            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])  # Y[j][k] → Y[j][k-1] ∨ X[j][k]
         # Last machine
         emit([get_var("Y", j, m-2), X[j][m-1]])
-        emit([-get_var("Y", j, m-2), -X[j][m-1]])  
+        emit([-get_var("Y", j, m-2), -X[j][m-1]])
     print("After var: ", var_counter)
-    
-    # (C7) If i ≺ j, then j cannot be at an earlier station than i
-    for i, j in adj:
-        for k in range(m-1):
-            emit([-get_var("Y",j,k), -X[i][k+1]])
 
-    # T[j][t] represents "task j starts at time t or earlier"
+    # (C7) Precedence → machine order: if i ≺ j, then j cannot be at an earlier station than i
+    # Y[j][k] → ¬X[i][k+1]  ⟺  ¬Y[j][k] ∨ ¬X[i][k+1]
+    for i, j in adj:
+        for k in range(m - 1):
+            emit([-get_var("Y", j, k), -X[i][k+1]])
+
+    # (C3+C4) Staircase encoding for S: ALO + AMO using auxiliary variable T[j][t]
+    # T[j][t] = true  ⟺  task j starts at time t or earlier (prefix sum)
     for j in range(n):
-        last_t = horizon-time_list[j]
-        
-        # Special case: Full cycle tasks (only one feasible start time: t=0)
+        last_t = horizon - time_list[j]  # latest valid start time
+
         if last_t == 0:
-            # Force the task to start at t=0 (equivalent to original constraint #4)
+            # Task takes up the entire horizon → can only start at t=0
             emit([S[j][0]])
         else:
-            # First time slot
+            # t=0: T[j][0] ≡ S[j][0]
             set_var(S[j][0], "T", j, 0)
-            
-            # Intermediate time slots
+
+            # t=1..last_t-1: intermediate staircase slots
             for t in range(1, last_t):
-                emit([-get_var("T", j, t-1), get_var("T", j, t)]) # T[j][t-1] -> T[j][t]
-                emit([-S[j][t], get_var("T", j, t)]) # S[j][t] -> T[j][t]
-                emit([-S[j][t], -get_var("T", j, t-1)]) # S[j][t] -> ¬T[j][t-1]
-                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)]) # T[j][t] -> (T[j][t-1] ∨ S[j][t])
-            
-            # Last time slot (ensures at least one start time)
+                emit([-get_var("T", j, t-1), get_var("T", j, t)])              # T[j][t-1] → T[j][t]
+                emit([-S[j][t], get_var("T", j, t)])                            # S[j][t] → T[j][t]
+                emit([-S[j][t], -get_var("T", j, t-1)])                         # S[j][t] → ¬T[j][t-1]
+                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)])     # T[j][t] → T[j][t-1] ∨ S[j][t]
+
+            # t=last_t: must have at least one start time
             emit([get_var("T", j, last_t-1), S[j][last_t]])
             emit([-get_var("T", j, last_t-1), -S[j][last_t]])
 
 
-    # (C5) If started, it must run for tj steps
+    # (C5) Continuity: S[j][t] → A[j][t], A[j][t+1], ..., A[j][t+tj-1]
+    # If task j starts at t, it must run for the next tj steps
     for j, tj in enumerate(time_list):
         for t in valid_starts[j]:
             for eps in range(tj):
                 if t + eps < horizon:
                     emit([-S[j][t], A[j][t + eps]])
 
-    # (C6) No overlap on the same machine
+    # (C6a) Same-machine indicator — definition of SM[i][j]:
+    # (X[i][k] ∧ X[j][k]) → SM[i][j]  ⟺  ¬X[i][k] ∨ ¬X[j][k] ∨ SM[i][j]
+    # If both i and j are assigned to station k, then SM[i][j] = true
+    for k in range(m):
+        for i in range(n - 1):
+            for j in range(i + 1, n):
+                emit([-X[i][k], -X[j][k], get_var("SM", i, j)])
+
+    # (C6b) Same-machine indicator — negation of SM[i][j] when on different stations:
+    # (X[i][k] ∧ X[j][l]) → ¬SM[i][j]  (k ≠ l)  ⟺  ¬X[i][k] ∨ ¬X[j][l] ∨ ¬SM[i][j]
+    # If i and j are on different stations, then SM[i][j] = false
     for i in range(n - 1):
         for j in range(i + 1, n):
             for k in range(m):
-                for t in range(horizon):
-                    emit([-X[i][k], -X[j][k], -A[i][t], -A[j][t]])
+                for l in range(m):
+                    if k == l:
+                        continue
+                    emit([-X[i][k], -X[j][l], -get_var("SM", i, j)])
 
-    # # (C7) If i ≺ j, then j cannot be at an earlier station than i
-    # for i, j in adj:
-    #     for k in range(m):
-    #         for h in range(k + 1, m):
-    #             emit([-X[j][k], -X[i][h]])
+    # (C6c) Non-overlap on the same station — using SM and staircase T:
+    # Direction 1 (constraining j based on the start time of i):
+    #   SM[i][j] ∧ S[i][t] → T[j][t - t_j] ∨ ¬T[j][t + t_i - 1]
+    #   Meaning: if on the same station and i starts at t, then j must finish before t (T[j][t-tj])
+    #            or j must start after i finishes (¬T[j][t+ti-1])
+    # Direction 2 (symmetric — constraining i based on the start time of j):
+    #   SM[i][j] ∧ S[j][t] → T[i][t - t_i] ∨ ¬T[i][t + t_j - 1]
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            last_j = horizon - time_list[j]  # maximum valid T index for task j
+            last_i = horizon - time_list[i]  # maximum valid T index for task i
 
-    # (C8) On the same machine, i cannot start after j
-    # for i, j in adj:
-    #     for k in range(m):
-    #         for t1 in valid_starts[i]:
-    #             for t2 in valid_starts[j]:
-    #                 if t1 > t2:
-    #                     emit([-X[i][k], -X[j][k], -S[i][t1], -S[j][t2]])
+            # Direction 1: constrain j based on start of i
+            for t in range(horizon - time_list[i] + 1):
+                max_t_j = last_j - 1
+                clause = [-get_var("SM", i, j), -S[i][t]]
+                t_left = t - time_list[j]          # j finishes before t if T[j][t_left] = true
+                if 0 <= t_left <= max_t_j:
+                    clause.append(get_var("T", j, t_left))
+                t_right = t + time_list[i] - 1    # j starts after i finishes if ¬T[j][t_right]
+                if 0 <= t_right <= max_t_j:
+                    clause.append(-get_var("T", j, t_right))
+                emit(clause)
 
+            # Direction 2: constrain i based on start of j (symmetric)
+            for t in range(horizon - time_list[j] + 1):
+                max_t_i = last_i - 1
+                clause = [-get_var("SM", i, j), -S[j][t]]
+                t_left = t - time_list[i]          # i finishes before t if T[i][t_left] = true
+                if 0 <= t_left <= max_t_i:
+                    clause.append(get_var("T", i, t_left))
+                t_right = t + time_list[j] - 1    # i starts after j finishes if ¬T[i][t_right]
+                if 0 <= t_right <= max_t_i:
+                    clause.append(-get_var("T", i, t_right))
+                emit(clause)
 
-    for i,j in adj:
+    # (C8) Precedence → time order: if i ≺ j and on the same station k, then i must finish before j starts
+    # Use staircase T to encode: ¬X[i][k] ∨ ¬X[j][k] ∨ ¬T[j][t] ∨ ¬S[i][t_i]
+    # with t_i = t - t_i + 1 being the corresponding start time of i to finish at t
+    for i, j in adj:
         for k in range(m):
+            left_bound = time_list[i] - 1           # j cannot start before t_i steps
+            right_bound = horizon - time_list[j]    # right bound of T[j]
 
-            left_bound = time_list[i] - 1
-            right_bound = horizon - time_list[j]
+            # T[j][left_bound] must be false (j cannot start at this position yet)
             emit([-X[i][k], -X[j][k], -get_var("T", j, left_bound)])
-            for t in range (left_bound + 1, right_bound):
-                t_i = t - time_list[i]+1
+
+            # For t from left_bound+1 to right_bound-1
+            for t in range(left_bound + 1, right_bound):
+                t_i = t - time_list[i] + 1          # start of i to finish at t
                 emit([-X[i][k], -X[j][k], -get_var("T", j, t), -S[i][t_i]])
-            for t in range (max(0,right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
+
+            # T[j] reached the end: constrain S[i] not to start too late
+            for t in range(max(0, right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
                 emit([-X[i][k], -X[j][k], -S[i][t]])
 
-    # (C9) If resource r+1 is used, then r must be used
+    # (C9) Resource monotonicity: R[k][r+1] → R[k][r]
+    # If station k uses the (r+1)-th resource, then it must have used the r-th resource
     for k in range(m):
         for r in range(r_max - 1):
             emit([-R[k][r + 1], R[k][r]])
 
-    # (C10) Relate start window to machine resources
+    # (C10) Relation of start window to machine resources:
+    # S[j][t] ∧ X[j][k] → R[k][q-1]  with q = ⌈(t + t_j) / c⌉
+    # If task j starts at t on station k, then station k must have at least q resources
     for j, tj in enumerate(time_list):
         for k in range(m):
             for t in valid_starts[j]:
@@ -400,9 +444,9 @@ def build_base_formula():
                 if q <= r_max:
                     emit([-S[j][t], -X[j][k], R[k][q - 1]])
                 else:
-                    emit([-S[j][t], -X[j][k]])
+                    emit([-S[j][t], -X[j][k]])  # unsatisfiable: task cannot start at t
 
-    # (C11) Resource budget of the entire line
+    # (C11) Line-wide resource budget: Σ R[k][r] ≤ R_max
     lits = []
     weights = []
     for k in range(m):
@@ -612,14 +656,6 @@ def add_inagural(solver, peak):
             solver.add_clause(cl)
     return solver
 
-class WCNFWrapper:
-    def __init__(self, wcnf):
-        self.wcnf = wcnf
-    def add_clause(self, clause):
-        self.wcnf.append(clause)
-    def nof_clauses(self):
-        return len(self.wcnf.hard)
-
 def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     print("run single instance")
     global name, m, c, r_max, R_max, X, S, A, R, best_model, best_peak, U
@@ -644,7 +680,7 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     read_input(name)
     load_power(name)
     generate_vars()
-    print("MaxSAT Solver")
+    print("Staircase 1 3")
     print(f"Solving {name} with m={m}, c={c}, r_max={r_max}, R_max={R_max}")
     t_start = time.time()
     solver, var_counter, horizon, base_clauses = build_base_formula()
@@ -688,49 +724,60 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
         base_clause_count=base_clause_count,
     )
 
-    # MaxSAT Solving
+    # Tighten bound iteratively
     best_model = model
     best_peak = first_peak
-    
-    wcnf = WCNF()
-    # Add base hard clauses
-    for cl in base_clauses:
-        wcnf.append(cl)
-        
-    # Add peak constraints (hard) + soft clauses for minimization
-    # Use first_peak as the upper bound for the ladder encoding
-    wrapper = WCNFWrapper(wcnf)
-    add_inagural(wrapper, first_peak)
-    
-    # Soft clauses: minimize sum(U)
-    for u in U:
-        wcnf.append([-u], weight=1)
-        
-    print(f"WCNF: {len(wcnf.hard)} hard, {len(wcnf.soft)} soft")
-    
-    with RC2(wcnf) as rc2:
-        model = rc2.compute()
-        if model:
-            best_model = model
-            size = max(var_counter, max(abs(l) for l in model))
-            best_peak, _ = compute_peak(decode_model(model, size), horizon)
-            print(f"MaxSAT found peak: {best_peak}")
-        else:
-            print("MaxSAT failed to find a model (should not happen if feasible)")
+    print("solver clauses:", solver.nof_clauses())
+    solver = add_inagural(solver, best_peak)
+    print("After INAGURAL, solver clauses:", solver.nof_clauses())
+
+    attempts = 0
+    LB = max(W)
+    while True:
+        attempts += 1
+        if not solver.solve():
+            break
+
+        model = solver.get_model()
+        # Flush INTERMEDIATE snapshot
+        runtime_intermediate = time.time() - t_start
+        size = max(var_counter, max(abs(l) for l in model))
+        peak_found, _ = compute_peak(decode_model(model, size), horizon)
+        add_summary_row(
+            status="INTERMEDIATE",
+            peak=peak_found,
+            attempts=attempts,
+            runtime_sec=runtime_intermediate,
+            base_vars=var_counter,
+            base_clause_count=base_clause_count,
+        )
+        if WRITE_HTML:
+            outfile = write_html_schedule(
+                name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
+            )
+            if outfile:
+                print(f"HTML schedule (intermediate) written to {outfile}")
+        best_model = model
+        best_peak = peak_found
+        idx = best_peak - LB - 1
+        print("New best peak:", best_peak)  
+        if idx <= 0 or idx > len(U):
+            break
+        solver.add_clause([-U[idx - 1]])  # Exclude previous peak candidate
 
     runtime = time.time() - t_start
     print(f"Best peak: {best_peak} | runtime: {runtime:.3f}s")
     print(summarize_solution(best_model, horizon))
     if WRITE_HTML:
         outfile = write_html_schedule(name, m, c, r_max, R_max, best_model, horizon, best_peak, runtime)
-    if outfile:
-        print(f"HTML schedule written to {outfile}")
+        if outfile:
+            print(f"HTML schedule written to {outfile}")
 
     # Final OPTIMAL snapshot (or best found)
     add_summary_row(
         status="OPTIMAL",
         peak=best_peak,
-        attempts=1,
+        attempts=attempts,
         runtime_sec=runtime,
         base_vars=var_counter,
         base_clause_count=base_clause_count,

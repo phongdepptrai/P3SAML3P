@@ -19,16 +19,19 @@ Always resolve the project venv Python path first.
 Run the following to find the correct interpreter (in order of priority):
 
 ```bash
-# 1. Project-local .venv (preferred)
+# 1. WSL home venv used by project runners (preferred for this workspace)
+ls /home/lucifong/P3SAML3P/.venv/bin/python3
+
+# 2. Project-local .venv
 ls <PROJECT_ROOT>/.venv/bin/python3
 
-# 2. Project-local venv (alternative name)
+# 3. Project-local venv (alternative name)
 ls <PROJECT_ROOT>/venv/bin/python3
 
-# 3. WSL venv (Windows cross-platform)
+# 4. Windows-mounted WSL venv fallback
 ls <PROJECT_ROOT>/.venv_wsl/bin/python3
 
-# 4. Fall back to system python only if none found
+# 5. Fall back to system python only if none found
 which python3
 ```
 
@@ -36,8 +39,9 @@ which python3
 
 | Project | Venv Python Path |
 |---|---|
-| P3SAML3P | `/home/phongdeptrai/P3SAML3P/.venv/bin/python3` |
-| SAML3P | `/home/phongdeptrai/SAML3P/.venv/bin/python3` *(verify if exists)* |
+| P3SAML3P | `/home/lucifong/P3SAML3P/.venv/bin/python3` |
+| P3SAML3P Windows-mounted fallback | `<PROJECT_ROOT>/.venv_wsl/bin/python3` *(may not have docplex/cplex)* |
+| SAML3P | `/home/lucifong/SAML3P/.venv/bin/python3` *(verify if exists)* |
 
 ## How to Use in Commands
 
@@ -47,7 +51,7 @@ which python3
 python3 solvers/Incremental.py
 
 # CORRECT
-/home/phongdeptrai/P3SAML3P/.venv/bin/python3 solvers/Incremental.py
+/home/lucifong/P3SAML3P/.venv/bin/python3 solvers/Incremental.py
 ```
 
 ### Screen sessions
@@ -56,13 +60,13 @@ python3 solvers/Incremental.py
 screen -S myscreen -dm bash -c "python3 solvers/Incremental.py"
 
 # CORRECT
-VENV=/home/phongdeptrai/P3SAML3P/.venv/bin/python3
-screen -S myscreen -dm bash -c "cd /home/phongdeptrai/P3SAML3P && $VENV solvers/Incremental.py 2>&1 | tee logs/myscreen.log; exec bash"
+VENV=/home/lucifong/P3SAML3P/.venv/bin/python3
+screen -S myscreen -dm bash -c "cd /home/lucifong/P3SAML3P && $VENV solvers/Incremental.py 2>&1 | tee logs/myscreen.log; exec bash"
 ```
 
 ### As a variable (reusable pattern)
 ```bash
-VENV=$(find /home/phongdeptrai/P3SAML3P/.venv/bin -name "python3" | head -1)
+VENV=$(find /home/lucifong/P3SAML3P/.venv/bin -name "python3" | head -1)
 $VENV <script> <args>
 ```
 
@@ -70,10 +74,11 @@ $VENV <script> <args>
 
 Always verify the venv has the required packages before running:
 ```bash
-/home/phongdeptrai/P3SAML3P/.venv/bin/python3 -c "import pysat; print('pysat OK')"
+/home/lucifong/P3SAML3P/.venv/bin/python3 -c "import pysat; print('pysat OK')"
+/home/lucifong/P3SAML3P/.venv/bin/python3 -c "import docplex, cplex; print(cplex.Cplex().get_version())"
 ```
 
-If `ModuleNotFoundError` appears for `pysat` or other packages, it means
+If `ModuleNotFoundError` appears for `pysat`, `docplex`, `cplex`, or other packages, it means
 the wrong Python was used — retry with the explicit venv path above.
 
 ## Notes

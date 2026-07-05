@@ -49,9 +49,9 @@ DATA_DIR = PROJECT_ROOT / "presedent_graph"
 POWER_DIR = PROJECT_ROOT / "official_task_power"
 var_map = {}
 var_counter = 0
-WRITE_HTML = True  # Set to False via --no-html flag to skip HTML schedule output
+WRITE_HTML = False  # Set to True via --write-html flag to enable HTML schedule output
 
-def flush_summary():
+def flush_summary(final=False):
     """Write summary rows replacing any existing entry with the same key."""
     if not summary_rows:
         return
@@ -94,15 +94,16 @@ def flush_summary():
         writer.writeheader()
         writer.writerows(merged)
 
-    # XLSX if pandas available
-    try:
-        import pandas as pd  # type: ignore
+    # XLSX if pandas available - only write on final execution to avoid overhead
+    if final:
+        try:
+            import pandas as pd  # type: ignore
 
-        df = pd.DataFrame(merged)
-        xlsx_path = out_dir / "summary.xlsx"
-        df.to_excel(xlsx_path, index=False)
-    except Exception:
-        pass
+            df = pd.DataFrame(merged)
+            xlsx_path = out_dir / "summary.xlsx"
+            df.to_excel(xlsx_path, index=False)
+        except Exception:
+            pass
 
     summary_rows.clear()
 
@@ -124,7 +125,8 @@ def add_summary_row(status: str, peak: Any, attempts: int, runtime_sec: float, b
             "status": status,
         }
     )
-    flush_summary()
+    is_final = status in ("OPTIMAL", "TIMEOUT_INFEASIBLE", "UNSAT")
+    flush_summary(final=is_final)
 
 data_set = [
     # Easy families 
@@ -166,11 +168,11 @@ data_set = [
 ]
 
 test_data_set = [
-    ["MERTENS", 6, 6],
-    ["MANSOOR", 4, 48],
-    ["MITCHELL", 8, 14],
-    ["BUXEY", 14, 25],
-    ["SAWYER", 14, 25],
+    ["MERTENS", 6, 6, 3, 10],
+    ["MANSOOR", 4, 48, 2, 6],
+    ["MITCHELL", 8, 14, 3, 12],
+    ["BUXEY", 14, 25, 1, 14],
+    ["SAWYER", 14, 25, 2, 20],
 ]
 
 
@@ -619,6 +621,15 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     best_model = None
     best_peak = None
     
+    # Warm up PySAT solver and PB encoder to avoid first-run penalty in measurements
+    try:
+        warm_solver = Cadical195()
+        warm_solver.add_clause([1])
+        warm_solver.solve()
+        PBEnc.leq(lits=[1], weights=[1], bound=1, top_id=1, encoding=EncType.binmerge)
+    except Exception:
+        pass
+    
     refresh_globals()
     read_input(name)
     load_power(name)
@@ -731,10 +742,10 @@ if __name__ == "__main__":
     # Detect if running in WSL
     is_wsl = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
 
-    # Parse --no-html flag (can appear anywhere in argv)
-    if "--no-html" in sys.argv:
-        WRITE_HTML = False
-        sys.argv = [a for a in sys.argv if a != "--no-html"]
+    # Parse --write-html or --html flag (can appear anywhere in argv)
+    if "--write-html" in sys.argv or "--html" in sys.argv:
+        WRITE_HTML = True
+        sys.argv = [a for a in sys.argv if a not in ("--write-html", "--html")]
 
     
     is_test = False
@@ -743,7 +754,7 @@ if __name__ == "__main__":
         sys.argv = [a for a in sys.argv if a != "--test"]
     if len(sys.argv) == 1:
         print("Run all tests")
-        TIMEOUT = 3600
+        TIMEOUT = 600
         completed_runs = set()
         summary_csv = OUTPUT_ROOT / "summary.csv"
         if summary_csv.exists():
@@ -759,55 +770,60 @@ if __name__ == "__main__":
                         )
                     )
 
-        current_data_set = test_data_set if is_test else data_set
-        for instance_id in range(0, len(current_data_set)):
-            instance = current_data_set[instance_id]
-            name = instance[0]
-            m = instance[1]
-            c = instance[2]
+        runs = []
+        if is_test:
+            for instance_id, instance in enumerate(test_data_set):
+                runs.append((instance_id, instance[0], instance[1], instance[2], instance[3], instance[4]))
+        else:
+            for instance_id, instance in enumerate(data_set):
+                name = instance[0]
+                m = instance[1]
+                c = instance[2]
+                for r_max in range(1, 4):
+                    for R_max in range(m, r_max * m + 1):
+                        runs.append((instance_id, name, m, c, r_max, R_max))
 
-            for r_max in range(1,4):
-                for R_max in range(m, r_max * m + 1):
-                    import shutil
-                    use_wsl = False
-                    if sys.platform != 'linux' and shutil.which("wsl"):
-                        use_wsl = True
+        for instance_id, name, m, c, r_max, R_max in runs:
+            import shutil
+            use_wsl = False
+            if sys.platform != 'linux' and shutil.which("wsl"):
+                use_wsl = True
 
-                    if use_wsl:
-                        # On Windows, call WSL, quoting absolute script path
-                        command = (
-                            "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
-                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\"" + (" --test" if is_test else "")
-                        )
-                    else:
-                        # On Linux/macOS, run natively
-                        runlim_path = PROJECT_ROOT / "runlim"
-                        if runlim_path.exists():
-                            try:
-                                os.chmod(runlim_path, 0o755)
-                            except Exception:
-                                pass
-                        command = (
-                            f"cd '{PROJECT_ROOT}' && "
-                            f"./runlim -r {TIMEOUT} '{sys.executable}' '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}" + (" --test" if is_test else "")
-                        )
-
+            if use_wsl:
+                # On Windows, call WSL, quoting absolute script path
+                command = (
+                    "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
+                    f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\"" + (" --test" if is_test else "")
+                )
+            else:
+                # On Linux/macOS, run natively
+                runlim_path = PROJECT_ROOT / "runlim"
+                if runlim_path.exists():
                     try:
-                        key = (str(name), str(m), str(c), str(r_max), str(R_max))
-                        if key in completed_runs:
-                            print(f"Skipping instance {instance} {r_max} {R_max} (already in summary.csv)")
-                            continue
-                        completed_runs.add(key)
+                        os.chmod(runlim_path, 0o755)
+                    except Exception:
+                        pass
+                command = (
+                    f"cd '{PROJECT_ROOT}' && "
+                    f"./runlim -r {TIMEOUT} '{sys.executable}' '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}" + (" --test" if is_test else "")
+                )
 
-                        print(f"Running instance {instance} {r_max} {R_max}")
-                        process = subprocess.Popen(command, shell=True)
-                        process.wait()
-                        time.sleep(1)
+            try:
+                key = (str(name), str(m), str(c), str(r_max), str(R_max))
+                if key in completed_runs:
+                    print(f"Skipping instance {name} {r_max} {R_max} (already in summary.csv)")
+                    continue
+                completed_runs.add(key)
 
-                        result = None
+                print(f"Running instance {name} {r_max} {R_max}")
+                process = subprocess.Popen(command, shell=True)
+                process.wait()
+                time.sleep(1)
 
-                    except Exception as e:
-                        print(f"Error running instance {instance} {r_max} {R_max}: {str(e)}")
+                result = None
+
+            except Exception as e:
+                print(f"Error running instance {name} {r_max} {R_max}: {str(e)}")
     
     else:
         instance_id = int(sys.argv[1])

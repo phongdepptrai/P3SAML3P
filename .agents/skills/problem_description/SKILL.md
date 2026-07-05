@@ -11,7 +11,7 @@ description: >
 
 ## Problem Overview
 
-**Assembly Line Balancing with Resource Constraints (SAT-based)**
+**Assembly Line Balancing with Resource Constraints (SAT/ILP-based)**
 
 Given `n` tasks with a precedence graph (DAG), assign each task to one of `m`
 stations and determine its start time, such that:
@@ -94,6 +94,36 @@ Same pattern for T (with S replacing X, and time index replacing machine index).
 | C11 | PBEnc ≤ R_max on all R[k][r] | Line-wide resource budget |
 | INAGURAL | Ladder `U[i]` over time phases | Tightens peak bound in optimization loop |
 
+## DOcplex ILP Formulation Notes
+
+`solvers/CPLEX_ILP.py` implements the ILP equations directly with DOcplex
+variables `X[j,k]`, `S[j,t]`, `R[k,r]`, and integer `W_M`. It should solve via
+`mdl.solve(...)` using the native CPLEX Python API, not by exporting LP/SAV
+files and shelling out to the `cplex` executable.
+
+Critical equation/indexing notes:
+
+- Eq. (5) station precedence and Eq. (8) same-station temporal precedence apply
+  only to real precedence arcs `(i,j) ∈ adj`, not to every pair with `i < j`.
+  Eq. (9) no-overlap is the one that applies to every unordered task pair.
+- Eq. (7) resource activation is easy to shift by one. In 1-based math:
+  `T^j_{r-1} = {0, ..., (r-1)c - t_j}`. In 0-based Python, for `R[k,r_idx]`,
+  use `upper_t = r_idx * c - t_j`. If `upper_t < 0`, the constraint reduces to
+  `X[j,k] <= R[k,r_idx]`.
+- `R[k,r]` is a staircase variable: true means the station has at least `r+1`
+  resources active. Keep Eq. (11) / C9 monotonicity `R[k,r+1] <= R[k,r]`.
+- DOcplex progress data uses `pdata.current_objective` with
+  `pdata.has_incumbent`; do not read `pdata.objective`.
+- CPLEX ILP writes HTML schedules only when `--html` or `--write-html` is
+  passed. In batch mode, if `summary.csv` already has an instance but the HTML
+  file is missing, rerun that instance instead of skipping it.
+- CPLEX ILP `attempts` means the number of incumbent objective improvements
+  observed by the DOcplex progress listener; final rows should carry this
+  count instead of always writing zero.
+- For CPLEX Academic/Education installed in WSL, prefer the WSL venv at
+  `/home/lucifong/P3SAML3P/.venv/bin/python3` and verify with:
+  `python -c "import docplex, cplex; print(cplex.Cplex().get_version())"`.
+
 ## C8 Precedence Constraint — Detailed
 
 For `(i,j) ∈ adj` (i must finish before j starts) on the same machine k:
@@ -149,7 +179,8 @@ P3SAML3P/
 │   ├── Incremental.py   # + C8 temporal tightening
 │   ├── Inheritant.py    # + precedence inheritance
 │   ├── IncrementalSM.py # SM encoding (no A vars in C6) ← LATEST
-│   └── maxsat.py        # RC2 MaxSAT
+│   ├── maxsat.py        # RC2 MaxSAT
+│   └── CPLEX_ILP.py     # DOcplex ILP formulation solved by native CPLEX API
 ├── presedent_graph/   # Input .IN2 files
 ├── official_task_power/ # Task weights .txt
 ├── runners/           # runlim wrapper scripts
@@ -175,10 +206,10 @@ P3SAML3P/
 
 ```bash
 # Run full benchmark suite
-/home/phongdeptrai/P3SAML3P/.venv/bin/python3 solvers/Incremental.py --no-html
+/home/lucifong/P3SAML3P/.venv/bin/python3 solvers/Incremental.py --no-html
 
 # Run single instance: <instance_id> <r_max> <R_max>
-/home/phongdeptrai/P3SAML3P/.venv/bin/python3 solvers/Incremental.py 0 1 6
+/home/lucifong/P3SAML3P/.venv/bin/python3 solvers/Incremental.py 0 1 6
 
 # Attach to running screen
 screen -r incremental

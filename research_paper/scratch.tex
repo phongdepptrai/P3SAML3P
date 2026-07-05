@@ -1,0 +1,615 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese]{babel}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{geometry}
+\usepackage{enumitem}
+
+\geometry{a4paper, margin=2.5cm}
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+
+\title{SAT Encodings for Power-Peak Minimization in Parallel-Serial Assembly Lines}
+\author{Nguyễn Chí Phong}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{1. Bài toán}
+
+Xét bài toán cân bằng dây chuyền lắp ráp song song--nối tiếp có mục tiêu tối thiểu hóa đỉnh công suất, ký hiệu PSCALB3PM. Tập tác vụ là
+\[
+O=\{0,\ldots,n-1\},
+\]
+mỗi tác vụ $j\in O$ có thời lượng xử lý $t_j\in\mathbb{Z}_{+}$ và công suất tiêu thụ $w_j\in\mathbb{Z}_{+}$. Quan hệ tiên quyết được cho bởi tập cung
+\[
+E\subseteq O\times O,\qquad (i,j)\in E \Longleftrightarrow i\prec j.
+\]
+
+Dây chuyền có tập trạm
+\[
+M=\{0,\ldots,m-1\}.
+\]
+Mỗi trạm $k$ có thể dùng nhiều tài nguyên song song, tối đa $r_{\max}$ tài nguyên. Tổng tài nguyên toàn dây chuyền bị chặn bởi $R_{\max}$. Cycle time là $c$. Nếu trạm có $r$ tài nguyên thì miền thời gian ảo của trạm có độ dài $rc$; do đó miền thời gian lớn nhất được xét là
+\[
+H = c\,r_{\max},\qquad
+\mathcal{T}=\{0,\ldots,H-1\}.
+\]
+Tác vụ $j$ có thể bắt đầu tại
+\[
+\mathcal{T}^{j}=\{0,\ldots,H-t_j\}.
+\]
+
+Mục tiêu là tìm phép gán tác vụ vào trạm, thời điểm bắt đầu của tác vụ, và số tài nguyên tại mỗi trạm sao cho mọi ràng buộc tiên quyết, không chồng lấn và ngân sách tài nguyên được thỏa mãn, đồng thời đỉnh công suất theo pha chu kỳ là nhỏ nhất:
+\[
+\min\ \max_{\tau\in\{0,\ldots,c-1\}}
+\sum_{j\in O} w_j
+\sum_{q=0}^{r_{\max}-1}
+\mathbf{1}\{j\text{ đang chạy tại }qc+\tau\}.
+\]
+
+\section*{2. Mô hình ILP chính xác}
+
+Mô hình ILP được dùng như baseline chính xác. Các biến quyết định:
+\[
+X_{j,k} =
+\begin{cases}
+1,&\text{nếu tác vụ }j\text{ được gán cho trạm }k,\\
+0,&\text{ngược lại,}
+\end{cases}
+\]
+\[
+S_{j,t} =
+\begin{cases}
+1,&\text{nếu tác vụ }j\text{ bắt đầu tại thời điểm }t,\\
+0,&\text{ngược lại,}
+\end{cases}
+\]
+\[
+R_{k,r} =
+\begin{cases}
+1,&\text{nếu trạm }k\text{ dùng ít nhất tài nguyên thứ }r,\\
+0,&\text{ngược lại,}
+\end{cases}
+\qquad r=1,\ldots,r_{\max}.
+\]
+
+Định nghĩa hàm hoạt động
+\[
+F(j,t)=
+\sum_{\tau=\max\{0,t-t_j+1\}}^{\min\{t,H-t_j\}} S_{j,\tau}.
+\]
+Khi mỗi tác vụ có đúng một thời điểm bắt đầu, $F(j,t)=1$ nếu và chỉ nếu tác vụ $j$ đang chạy tại thời điểm ảo $t$.
+
+Mô hình ILP:
+\begingroup
+\small
+\begin{align}
+\min\;& W_M \tag{1}\\
+\sum_{k\in M}X_{j,k} &= 1,
+&& \forall j\in O, \tag{2}\\
+\sum_{j\in O}t_jX_{j,k}
+&\le c\sum_{r=1}^{r_{\max}}R_{k,r},
+&& \forall k\in M, \tag{3}\\
+X_{j,k}
+&\le \sum_{h\in M:\ h\le k}X_{i,h},
+&& \forall (i,j)\in E,\ \forall k\in M, \tag{4}\\
+\sum_{t\in\mathcal{T}^{j}}S_{j,t} &= 1,
+&& \forall j\in O, \tag{5}\\
+X_{j,k}-R_{k,r}
+&\le \sum_{t\in \mathcal{T}^{j}_{r-1}} S_{j,t},
+&& j\in O,\ k\in M,\ r=1,\ldots,r_{\max}, \tag{6}\\
+S_{j,t}
+&\le \sum_{\tau=0}^{t-t_i}S_{i,\tau}
+    +2-X_{i,k}-X_{j,k},
+&& (i,j)\in E,\ k\in M,\ t\in\mathcal{T}^{j}, \tag{7}\\
+X_{i,k}+X_{j,k}+F(i,t)+F(j,t)
+&\le 3,
+&& i<j,\ k\in M,\ t\in\mathcal{T}, \tag{8}\\
+\sum_{j\in O}\sum_{r=1}^{r_{\max}}
+w_jF\big(j,(r-1)c+\tau\big)
+&\le W_M,
+&& \forall \tau=0,\ldots,c-1, \tag{9}\\
+R_{k,r+1}&\le R_{k,r},
+&& \forall k\in M,\ r=1,\ldots,r_{\max}-1, \tag{10}\\
+\sum_{k\in M}\sum_{r=1}^{r_{\max}}R_{k,r}
+&\le R_{\max}. \tag{11}
+\end{align}
+\endgroup
+\[
+X_{j,k},S_{j,t},R_{k,r}\in\{0,1\},\qquad W_M\in\mathbb{Z}_{+}.
+\tag{12}
+\]
+Các miền chỉ số tương ứng là $j\in O$, $k\in M$, $t\in\mathcal{T}^{j}$ và $r=1,\ldots,r_{\max}$.
+
+Trong (4) và (7), ràng buộc chỉ áp dụng cho cung tiên quyết thật $(i,j)\in E$, không áp dụng cho mọi cặp $i<j$. Ngược lại, ràng buộc không chồng lấn (8) áp dụng cho mọi cặp tác vụ.
+
+\section*{3. Đóng góp chính: mã hóa SAT}
+
+Đóng góp chính là biến bài toán tối ưu đỉnh công suất thành một chuỗi bài toán SAT/PB-SAT khả thi với các cắt đỉnh công suất. Thay vì tối ưu trực tiếp $W_M$, ta kiểm tra tính khả thi với một cận đỉnh $B$:
+\[
+\Phi(B)\text{ khả thi}
+\Longleftrightarrow
+\exists\text{ lịch thỏa mọi ràng buộc và có đỉnh công suất không vượt quá }B.
+\]
+Sau đó, cận $B$ được hạ dần bằng các chiến lược incremental.
+
+\subsection*{3.1. Biến Boolean}
+
+Các biến nguyên thủy:
+\[
+X_{j,k}\in\{0,1\},\quad
+S_{j,t}\in\{0,1\},\quad
+A_{j,t}\in\{0,1\},\quad
+R_{k,r}\in\{0,1\}.
+\]
+Biến $A_{j,t}$ mô tả trạng thái hoạt động của tác vụ $j$ tại thời điểm ảo $t$.
+
+Các biến phụ dùng trong mã hóa staircase:
+\[
+Y_{j,k}=1
+\Longleftrightarrow
+\sum_{h=0}^{k}X_{j,h}=1,
+\qquad k=0,\ldots,m-2,
+\]
+\[
+T_{j,t}=1
+\Longleftrightarrow
+\sum_{\tau=0}^{t}S_{j,\tau}=1,
+\qquad t=0,\ldots,H-t_j-1.
+\]
+Hai biến biên $Y_{j,m-1}$ và $T_{j,H-t_j}$ không cần xuất hiện trong mô hình, vì sau các ràng buộc ``đúng một lựa chọn'', chúng trở thành các giá trị hiển nhiên.
+
+Biến phụ cho cùng trạm:
+\[
+SM_{i,j}=1
+\Longleftrightarrow
+\text{tác vụ }i\text{ và }j\text{ nằm trên cùng trạm},
+\qquad i<j.
+\]
+
+\subsection*{3.2. Mã hóa staircase cho phép gán trạm}
+
+Với mỗi $j\in O$, đặt
+\[
+Y_{j,0}\equiv X_{j,0}.
+\]
+Với $k=1,\ldots,m-2$:
+\begin{align}
+Y_{j,k-1} &\Rightarrow Y_{j,k}, \tag{13}\\
+X_{j,k} &\Rightarrow Y_{j,k}, \tag{14}\\
+X_{j,k} &\Rightarrow \neg Y_{j,k-1}, \tag{15}\\
+Y_{j,k} &\Rightarrow Y_{j,k-1}\lor X_{j,k}. \tag{16}
+\end{align}
+Các kéo theo trên được đưa về các mệnh đề:
+\begin{align}
+(\neg Y_{j,k-1}\lor Y_{j,k}),\\
+(\neg X_{j,k}\lor Y_{j,k}),\\
+(\neg X_{j,k}\lor \neg Y_{j,k-1}),\\
+(X_{j,k}\lor Y_{j,k-1}\lor \neg Y_{j,k}).
+\end{align}
+Máy cuối được mã hóa bằng XOR:
+\[
+Y_{j,m-2}\oplus X_{j,m-1},
+\]
+tương đương
+\[
+(Y_{j,m-2}\lor X_{j,m-1})
+\land
+(\neg Y_{j,m-2}\lor \neg X_{j,m-1}).
+\]
+
+Mã hóa này thay thế ALO/AMO cặp đôi cho $X$, giảm số mệnh đề từ bậc hai theo $m$ xuống bậc tuyến tính.
+
+\subsection*{3.3. Tiên quyết theo thứ tự trạm}
+
+Với mỗi quan hệ tiên quyết $(i,j)\in E$, tác vụ sau $j$ không được đặt ở trạm đứng trước tác vụ trước $i$. Nhờ biến prefix $Y$, điều kiện này được viết gọn thành
+\[
+Y_{j,k}\Rightarrow \neg X_{i,k+1},
+\qquad
+\forall (i,j)\in E,\ k=0,\ldots,m-2.
+\]
+hay tương đương với mệnh đề
+\[
+(\neg Y_{j,k}\lor \neg X_{i,k+1}).
+\tag{17}
+\]
+
+\subsection*{3.4. Mã hóa staircase cho thời điểm bắt đầu}
+
+Với mỗi tác vụ $j$, đặt
+\[
+L_j=H-t_j.
+\]
+Trường hợp $L_j=0$ là suy biến: tác vụ chỉ có thể bắt đầu tại thời điểm $0$, do đó
+\[
+S_{j,0}.
+\]
+Với $L_j>0$, đặt
+\[
+T_{j,0}\equiv S_{j,0}.
+\]
+Với $t=1,\ldots,L_j-1$:
+\begin{align}
+T_{j,t-1} &\Rightarrow T_{j,t}, \tag{18}\\
+S_{j,t} &\Rightarrow T_{j,t}, \tag{19}\\
+S_{j,t} &\Rightarrow \neg T_{j,t-1}, \tag{20}\\
+T_{j,t} &\Rightarrow T_{j,t-1}\lor S_{j,t}. \tag{21}
+\end{align}
+Các quan hệ này tương ứng với các mệnh đề:
+\begin{align}
+(\neg T_{j,t-1}\lor T_{j,t}),\\
+(\neg S_{j,t}\lor T_{j,t}),\\
+(\neg S_{j,t}\lor \neg T_{j,t-1}),\\
+(S_{j,t}\lor T_{j,t-1}\lor \neg T_{j,t}).
+\end{align}
+Thời điểm cuối được mã hóa bằng XOR:
+\[
+T_{j,L_j-1}\oplus S_{j,L_j}.
+\tag{22}
+\]
+
+\subsection*{3.5. Liên kết bắt đầu--hoạt động}
+
+Nếu tác vụ $j$ bắt đầu ở $t$, nó phải hoạt động liên tục trong $t_j$ đơn vị thời gian:
+\[
+S_{j,t}\Rightarrow A_{j,t+\varepsilon},
+\qquad
+\forall j\in O,\ t\in\mathcal{T}^{j},\ \varepsilon=0,\ldots,t_j-1.
+\]
+Ràng buộc này cho ta mệnh đề
+\[
+(\neg S_{j,t}\lor A_{j,t+\varepsilon}).
+\tag{23}
+\]
+
+\subsection*{3.6. Biến cùng trạm và mã hóa không chồng lấn}
+
+Với mỗi cặp $i<j$, biến $SM_{i,j}$ ghi nhận việc hai tác vụ nằm trên cùng một trạm. Nếu cả hai cùng được gán cho trạm $k$, ta có
+\[
+X_{i,k}\land X_{j,k}\Rightarrow SM_{i,j},
+\]
+được mã hóa bởi mệnh đề
+\[
+(\neg X_{i,k}\lor \neg X_{j,k}\lor SM_{i,j}).
+\tag{24}
+\]
+Ngược lại, nếu hai tác vụ nằm ở hai trạm khác nhau, biến này phải nhận giá trị sai:
+\[
+X_{i,k}\land X_{j,\ell}\Rightarrow \neg SM_{i,j},
+\qquad k\ne \ell,
+\]
+và được biểu diễn bởi
+\[
+(\neg X_{i,k}\lor \neg X_{j,\ell}\lor \neg SM_{i,j}).
+\tag{25}
+\]
+
+Mã hóa không chồng lấn khai thác $SM$ và biến prefix $T$ để diễn đạt trực tiếp quan hệ thứ tự giữa hai khoảng xử lý. Nếu $i$ bắt đầu tại $t$ và hai tác vụ cùng trạm, thì $j$ phải nằm hoàn toàn trước $i$, hoặc bắt đầu sau khi $i$ kết thúc:
+\[
+SM_{i,j}\land S_{i,t}
+\Rightarrow
+\Big(T_{j,t-t_j}\lor \neg T_{j,t+t_i-1}\Big).
+\]
+Sau khi xử lý các trường hợp biên của miền thời gian, điều kiện trên trở thành
+\[
+(\neg SM_{i,j}\lor \neg S_{i,t}\lor B^{-}_{j,t}\lor B^{+}_{j,t}),
+\tag{26}
+\]
+trong đó
+\[
+B^{-}_{j,t}=
+\begin{cases}
+T_{j,t-t_j},&0\le t-t_j\le L_j-1,\\
+\bot,&\text{ngược lại,}
+\end{cases}
+\]
+\[
+B^{+}_{j,t}=
+\begin{cases}
+\neg T_{j,t+t_i-1},&0\le t+t_i-1\le L_j-1,\\
+\bot,&\text{ngược lại.}
+\end{cases}
+\]
+Ràng buộc đối xứng:
+\[
+SM_{i,j}\land S_{j,t}
+\Rightarrow
+\Big(T_{i,t-t_i}\lor \neg T_{i,t+t_j-1}\Big).
+\tag{27}
+\]
+
+\subsection*{3.7. Tiên quyết thời gian trên cùng trạm}
+
+Với mỗi cung $(i,j)\in E$ và mỗi trạm $k$, nếu $i$ và $j$ cùng trạm thì $i$ phải kết thúc trước khi $j$ bắt đầu. Đặt
+\[
+a_{ij}=t_i-1,\qquad b_j=H-t_j=L_j.
+\]
+Ở vùng đầu, $j$ không thể bắt đầu quá sớm:
+\[
+X_{i,k}\land X_{j,k}\Rightarrow \neg T_{j,a_{ij}},
+\]
+hay
+\[
+(\neg X_{i,k}\lor \neg X_{j,k}\lor \neg T_{j,a_{ij}}).
+\tag{28}
+\]
+Ở vùng giữa, với $t=a_{ij}+1,\ldots,b_j-1$, nếu $j$ đã bắt đầu không muộn hơn $t$ thì $i$ không được bắt đầu tại vị trí khiến nó kết thúc sau $t$:
+\[
+X_{i,k}\land X_{j,k}\land T_{j,t}
+\Rightarrow
+\neg S_{i,t-t_i+1},
+\]
+được viết thành
+\[
+(\neg X_{i,k}\lor \neg X_{j,k}\lor \neg T_{j,t}\lor \neg S_{i,t-t_i+1}).
+\tag{29}
+\]
+Ở vùng cuối, chỉ cần cấm trực tiếp các thời điểm bắt đầu quá muộn của $i$:
+\[
+X_{i,k}\land X_{j,k}
+\Rightarrow
+\neg S_{i,t},
+\qquad
+t=\max\{0,b_j-t_i+1\},\ldots,H-t_i.
+\]
+Mệnh đề tương ứng là
+\[
+(\neg X_{i,k}\lor \neg X_{j,k}\lor \neg S_{i,t}).
+\tag{30}
+\]
+Điểm quan trọng là vùng cuối phải được viết như (30). Không thể thay điều kiện hiển nhiên bằng $T_{j,L_j-1}$, bởi khi $j$ bắt đầu đúng tại thời điểm cuối $L_j$, biến $T_{j,L_j-1}$ nhận giá trị sai và ràng buộc mất tác dụng.
+
+\subsection*{3.8. Ràng buộc tài nguyên}
+
+Biến tài nguyên có tính đơn điệu:
+\[
+R_{k,r+1}\Rightarrow R_{k,r},
+\qquad r=1,\ldots,r_{\max}-1,
+\]
+hay
+\[
+(\neg R_{k,r+1}\lor R_{k,r}).
+\tag{31}
+\]
+
+Nếu tác vụ $j$ bắt đầu tại $t$ trên trạm $k$, trạm đó phải có đủ tài nguyên để chứa toàn bộ khoảng xử lý $[t,t+t_j)$. Đặt
+\[
+q(j,t)=\left\lceil \frac{t+t_j}{c}\right\rceil.
+\]
+Khi $q(j,t)\le r_{\max}$, điều kiện tài nguyên được biểu diễn bởi
+\[
+S_{j,t}\land X_{j,k}\Rightarrow R_{k,q(j,t)},
+\]
+và do đó ta thêm mệnh đề
+\[
+(\neg S_{j,t}\lor \neg X_{j,k}\lor R_{k,q(j,t)}).
+\tag{32}
+\]
+Khi $q(j,t)>r_{\max}$, thời điểm bắt đầu $t$ vượt quá khả năng tài nguyên của mọi trạm, nên tổ hợp này bị loại bỏ:
+\[
+(\neg S_{j,t}\lor \neg X_{j,k}).
+\tag{33}
+\]
+
+Ngân sách tài nguyên toàn dây chuyền:
+\[
+\sum_{k\in M}\sum_{r=1}^{r_{\max}}R_{k,r}\le R_{\max}.
+\tag{34}
+\]
+Ràng buộc pseudo-Boolean (34) được mã hóa sang CNF bằng bộ mã hóa PB, ví dụ binmerge.
+
+\section*{4. Tối ưu đỉnh công suất bằng SAT/PB-SAT}
+
+\subsection*{4.1. Cắt đỉnh công suất theo cận $B$}
+
+Với một cận đỉnh $B$, thêm ràng buộc:
+\[
+\sum_{j\in O} w_j\sum_{q=0}^{r_{\max}-1} A_{j,\tau+qc}
+\le B,
+\qquad \forall \tau=0,\ldots,c-1.
+\tag{35}
+\]
+Mỗi ràng buộc trong (35) là một bất đẳng thức pseudo-Boolean. Khi toàn bộ công thức còn khả thi sau khi thêm (35), ta thu được một lịch có đỉnh công suất không vượt quá $B$.
+
+\subsection*{4.2. Chiến lược tối ưu cơ sở}
+
+Gọi $\Phi$ là công thức SAT chứa mọi ràng buộc khả thi nhưng chưa có cắt đỉnh công suất. Trước tiên giải $\Phi$ để lấy một nghiệm khả thi ban đầu, rồi tính cận trên:
+\[
+UB = \max_{\tau}
+\sum_{j\in O} w_j\sum_{q=0}^{r_{\max}-1} A_{j,\tau+qc}.
+\]
+Sau đó lặp:
+\[
+\Phi \land \{ \text{đỉnh công suất}\le B\}
+\]
+với các giá trị $B<UB$ để cải thiện nghiệm. Khi không còn nghiệm với cận thấp hơn, $UB$ là đỉnh công suất tốt nhất trong phạm vi tìm kiếm.
+
+\subsection*{4.3. Cắt incremental bằng biến thang $U$}
+
+Đặt
+\[
+LB=\max_{j\in O} w_j,\qquad UB=\text{đỉnh công suất tốt nhất hiện tại}.
+\]
+Tạo biến thang
+\[
+U_{\ell},\qquad \ell=LB+1,\ldots,UB-1.
+\]
+Biến $U_\ell$ biểu diễn việc mức cận $\ell$ vẫn còn được cho phép trong công thức. Tính đơn điệu được áp đặt theo chiều:
+\[
+U_{\ell}\Rightarrow U_{\ell-1},
+\qquad \ell=LB+2,\ldots,UB-1,
+\]
+hay tương đương
+\[
+(\neg U_{\ell}\lor U_{\ell-1}).
+\tag{36}
+\]
+
+Với mỗi pha $\tau$, bổ sung bất đẳng thức pseudo-Boolean:
+\[
+\sum_{j\in O} w_j\sum_{q=0}^{r_{\max}-1} A_{j,\tau+qc}
+\;+\;
+\sum_{\ell=LB+1}^{UB-1} \neg U_{\ell}
+\le UB.
+\tag{37}
+\]
+Nếu ta muốn kiểm tra cận mới $B$ với $LB+1\le B<UB$, chỉ cần buộc
+\[
+\neg U_{B}.
+\tag{38}
+\]
+Khi $\neg U_B$ được thêm vào, do tính đơn điệu (36), mọi $U_\ell$ với $\ell\ge B$ cũng bị buộc sai. Khi đó số hạng phụ trong (37) tăng ít nhất $UB-B$, nên (37) suy ra
+\[
+\sum_{j\in O} w_j\sum_{q=0}^{r_{\max}-1} A_{j,\tau+qc}
+\le B.
+\]
+Do đó, sau khi tìm được nghiệm có đỉnh công suất $P$, bước cải thiện nghiêm ngặt sẽ đặt, nếu $P-1\ge LB+1$,
+\[
+B=P-1
+\qquad\text{và thêm}\qquad
+\neg U_{P-1}.
+\tag{39}
+\]
+Nếu $P-1<LB+1$, quá trình tìm kiếm đã đi tới sát cận dưới $LB=\max_j w_j$ và không cần thêm biến thang mới.
+Cách xây dựng này giữ nguyên công thức nền và chỉ thêm các mệnh đề ngắn để hạ cận, thay vì tái tạo toàn bộ nhóm ràng buộc đỉnh công suất.
+
+\subsection*{4.4. Kế thừa cận giữa các cấu hình tài nguyên}
+
+Với cùng một instance, xét đỉnh công suất tốt nhất đã biết cho các cấu hình tài nguyên nhỏ hơn:
+\[
+B(r_{\max},R_{\max}).
+\]
+Do tăng $r_{\max}$ hoặc tăng $R_{\max}$ chỉ làm không gian nghiệm rộng hơn, có thể dùng cận kế thừa:
+\[
+UB_{\text{inh}}(r_{\max},R_{\max})
+=
+\min\Big\{
+B(r_{\max}-1,R_{\max}),
+B(r_{\max},R_{\max}-1)
+\Big\},
+\tag{40}
+\]
+nếu các giá trị bên phải đã tồn tại. Cận này được dùng làm $UB$ ban đầu cho chiến lược incremental, giúp giảm số vòng tìm kiếm.
+
+\subsection*{4.5. Đóng bao bắc cầu của quan hệ tiên quyết}
+
+Một biến thể tăng cường thay tập cung trực tiếp $E$ bằng đóng bao bắc cầu $E^*$. Định nghĩa
+\[
+(i,j)\in E^*
+\Longleftrightarrow
+\text{tồn tại đường đi có hướng từ }i\text{ đến }j\text{ trong đồ thị tiên quyết}.
+\]
+Khi đó các ràng buộc thứ tự trạm (17) và thứ tự thời gian (28)--(30) được áp dụng cho mọi $(i,j)\in E^*$ thay vì chỉ cung trực tiếp $(i,j)\in E$.
+
+Về mặt logic, việc này không làm thay đổi tập nghiệm khả thi, vì $E^*$ là hệ quả bắc cầu của $E$. Tuy nhiên nó thêm các mệnh đề suy diễn sẵn:
+\[
+i\prec j,\ j\prec \ell
+\Longrightarrow
+i\prec \ell,
+\]
+giúp quá trình lan truyền đơn vị trong SAT mạnh hơn và cắt sớm các gán không thể mở rộng thành nghiệm.
+
+\section*{5. Biến thể SAT hiện có}
+
+Các biến thể SAT có thể được mô tả thống nhất bằng các khối ràng buộc ở trên:
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{SAT cơ sở}: dùng biến $X,S,A,R$; ALO/AMO trực tiếp cho gán trạm và thời điểm bắt đầu; không chồng lấn bằng $A$.
+\item \textbf{SAT staircase}: thay ALO/AMO trực tiếp bằng biến prefix $Y$ và $T$; rút gọn ràng buộc tiên quyết theo trạm và thời gian.
+\item \textbf{SAT incremental}: thêm biến thang $U$ và cắt pseudo-Boolean incremental để hạ cận đỉnh công suất mà không xây lại toàn bộ công thức.
+\item \textbf{SAT cùng-trạm}: thêm biến $SM_{i,j}$ và mã hóa không chồng lấn bằng $SM$--$T$, thay cho mệnh đề trực tiếp với $A_{i,t},A_{j,t}$.
+\item \textbf{SAT kế thừa}: khởi tạo $UB$ bằng cận tốt nhất từ cấu hình tài nguyên nhỏ hơn theo (40).
+\item \textbf{SAT đóng bao tiên quyết}: thay $E$ bằng $E^*$ trong các ràng buộc tiên quyết để tăng khả năng lan truyền.
+\end{itemize}
+
+\section*{6. Matheuristic đối chiếu}
+
+Ngoài đóng góp SAT, một matheuristic kiểu MSxLSPSC có thể được dùng làm phương pháp đối chiếu. Một nghiệm được mã hóa bởi
+\[
+\sigma=(\sigma_0,\sigma_1,\ldots,\sigma_{p-1}),
+\]
+trong đó $\sigma_k$ là dãy tác vụ của trạm $k$, các dãy không rỗng, mỗi tác vụ xuất hiện đúng một lần, và thứ tự phẳng của $\sigma$ thỏa tiên quyết.
+
+Với một mã hóa thứ tự $\sigma$, tài nguyên tối thiểu của trạm $k$ là
+\[
+r_k(\sigma)=
+\left\lceil
+\frac{\sum_{j\in\sigma_k}t_j}{c}
+\right\rceil,
+\]
+thời gian nhàn rỗi là
+\[
+I_k(\sigma)=r_k(\sigma)c-\sum_{j\in\sigma_k}t_j.
+\]
+Mức phạt tài nguyên:
+\[
+\operatorname{pen}(\sigma)
+=
+\max\left\{0,\sum_k r_k(\sigma)-R_{\max}\right\}
++
+\sum_k \max\{0,r_k(\sigma)-r_{\max}\}.
+\tag{41}
+\]
+Mã hóa thứ tự $\sigma$ khả thi khi $\operatorname{pen}(\sigma)=0$.
+
+Bộ giải mã tham lam xếp lịch trong từng trạm theo thứ tự $\sigma_k$ và chọn thời điểm bắt đầu trong khoảng
+\[
+d_e(k,\lambda)
+\le s_{k,\lambda}
+\le
+d_e(k,\lambda)+I_k(\sigma),
+\]
+sao cho mức tăng đỉnh công suất là nhỏ nhất. Bộ giải mã chính xác rút gọn cố định $\sigma$ và chỉ còn biến
+\[
+S_{k,\lambda,t}\in\{0,1\},\qquad W_M\in\mathbb{Z}_{+}.
+\]
+Nó giải bài toán:
+\begin{align}
+\min\;&W_M,\\
+\sum_{t}S_{k,\lambda,t}&=1,\\
+S_{k,\lambda+1,t}
+&\le
+\sum_{\tau\le t-t_{\sigma_{k,\lambda}}}
+S_{k,\lambda,\tau},\\
+\sum_{k,\lambda,t}
+\alpha_{\sigma_{k,\lambda},t,\tau}
+w_{\sigma_{k,\lambda}}S_{k,\lambda,t}
+&\le W_M,
+\qquad \tau=0,\ldots,c-1,
+\end{align}
+trong đó
+\[
+\alpha_{j,t,\tau}
+=
+\left|
+\{\varepsilon=0,\ldots,t_j-1:\ (t+\varepsilon)\bmod c=\tau\}
+\right|.
+\]
+
+Lân cận N2 chọn một trạm và một tác vụ, lấy tác vụ đó ra rồi thử chèn vào mọi vị trí hợp lệ của mọi trạm. Tìm kiếm cục bộ chấp nhận nghiệm có giá trị phạt không tăng và dừng sau 50 vòng liên tiếp không có cải thiện nghiêm ngặt. Chiến lược đa khởi tạo lặp lại quá trình trên cho đến khi hết giới hạn thời gian.
+
+\section*{7. Thước đo thực nghiệm}
+
+Với mỗi instance và cấu hình $(m,c,r_{\max},R_{\max})$, các đại lượng được ghi nhận gồm:
+\[
+\begin{aligned}
+&\text{đỉnh công suất tốt nhất},\quad
+\text{thời gian chạy},\\
+&\text{số biến},\quad
+\text{số mệnh đề},\quad
+\text{số lần cải thiện đỉnh công suất}.
+\end{aligned}
+\]
+Đối với matheuristic, ghi thêm:
+\[
+\begin{aligned}
+&\text{số lần khởi tạo lại},\quad
+\text{số lần gọi bộ giải mã tham lam},\\
+&\text{số lần gọi bộ giải mã chính xác},\quad
+\text{số mã hóa thứ tự bất khả thi}.
+\end{aligned}
+\]
+
+\end{document}

@@ -151,3 +151,5 @@ Thumbs.db
 Output/
 *.txt
 !requirements.txt
+*.pdf
+*.aux

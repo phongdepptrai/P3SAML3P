@@ -13,8 +13,8 @@ if sys.platform != 'linux' and shutil.which("wsl"):
 if use_wsl:
     WSL_ROOT = "/home/lucifong/P3SAML3P"
     VENV_PY = f"{WSL_ROOT}/.venv/bin/python3"
-    SCRIPT = f"{WSL_ROOT}/solvers/maxsat.py"
-    WINDOWS_OUTPUT = "/mnt/c/Users/admin/Documents/Python/P3SAML3P/Output/maxsat"
+    SCRIPT = f"{WSL_ROOT}/solvers/IncrementalSM_E.py"
+    WINDOWS_OUTPUT = "/mnt/c/Users/admin/Documents/Python/P3SAML3P/Output/IncrementalSM_E"
     
     sync_cmd = f"rsync -a --exclude='.venv*' --exclude='Output/' /mnt/c/Users/admin/Documents/Python/P3SAML3P/ {WSL_ROOT}/"
     run_cmd = f"export OUTPUT_ROOT='{WINDOWS_OUTPUT}' && cd '{WSL_ROOT}' && '{VENV_PY}' '{SCRIPT}'"
@@ -24,12 +24,12 @@ if use_wsl:
     
     bash_cmd = f"{sync_cmd} && {run_cmd}"
     wsl_command = ['wsl', 'bash', '-c', bash_cmd]
-    print(f"🚀 Running MaxSAT solver in WSL: {bash_cmd}")
+    print(f"Running in WSL: {bash_cmd}")
     result = subprocess.run(wsl_command)
     sys.exit(result.returncode)
 else:
-    SCRIPT = ROOT / "solvers" / "maxsat.py"
+    SCRIPT = ROOT / "solvers" / "IncrementalSM_E.py"
     cmd = [sys.executable, str(SCRIPT)] + sys.argv[1:]
-    print(f"🚀 Running MaxSAT solver natively: {' '.join(cmd)}")
+    print(f"Running natively: {' '.join(cmd)}")
     result = subprocess.run(cmd)
     sys.exit(result.returncode)

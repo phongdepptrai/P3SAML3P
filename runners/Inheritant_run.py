@@ -11,13 +11,18 @@ if sys.platform != 'linux' and shutil.which("wsl"):
     use_wsl = True
 
 if use_wsl:
-    WSL_ROOT = "/mnt/c/Users/admin/Documents/Python/P3SAML3P"
-    VENV_PY = f"{WSL_ROOT}/.venv_wsl/bin/python"
+    WSL_ROOT = "/home/lucifong/P3SAML3P"
+    VENV_PY = f"{WSL_ROOT}/.venv/bin/python3"
     SCRIPT = f"{WSL_ROOT}/solvers/Inheritant.py"
-    bash_cmd = f"cd '{WSL_ROOT}' && '{VENV_PY}' '{SCRIPT}'"
+    WINDOWS_OUTPUT = "/mnt/c/Users/admin/Documents/Python/P3SAML3P/Output/Inheritant"
+    
+    sync_cmd = f"rsync -a --exclude='.venv*' --exclude='Output/' /mnt/c/Users/admin/Documents/Python/P3SAML3P/ {WSL_ROOT}/"
+    run_cmd = f"export OUTPUT_ROOT='{WINDOWS_OUTPUT}' && cd '{WSL_ROOT}' && '{VENV_PY}' '{SCRIPT}'"
     if len(sys.argv) > 1:
         args = " ".join(sys.argv[1:])
-        bash_cmd += f" {args}"
+        run_cmd += f" {args}"
+    
+    bash_cmd = f"{sync_cmd} && {run_cmd}"
     wsl_command = ['wsl', 'bash', '-c', bash_cmd]
     print(f"Running in WSL: {bash_cmd}")
     result = subprocess.run(wsl_command)

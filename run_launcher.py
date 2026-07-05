@@ -47,7 +47,7 @@ def prompt_choose(options):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Choose and run a *_run.py wrapper. Extra args after '--' are passed through."
+        description="Choose and run a *_run.py wrapper."
     )
     parser.add_argument(
         "--script",
@@ -55,18 +55,34 @@ def main():
         help="Name or path of the *_run.py script to execute. If omitted, a menu is shown.",
     )
     parser.add_argument(
-        "extra",
-        nargs=argparse.REMAINDER,
-        help="Arguments passed to the selected *_run.py (prefix with '--' to separate).",
+        "--test",
+        action="store_true",
+        help="Run in test mode (appends --test)",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--html",
+        action="store_true",
+        help="Generate HTML schedules (appends --html)",
+    )
+    args, unknown = parser.parse_known_args()
 
     run_scripts = find_run_scripts()
     if not run_scripts:
         raise SystemExit("No *_run.py files found in runners/ or current directory.")
 
+    cli_test = "--test" in sys.argv
+    cli_html = "--html" in sys.argv or "--write-html" in sys.argv
+
+    test_mode = args.test
+    html_mode = args.html
+
     if args.script is None:
         target = prompt_choose(run_scripts)
+        # Prompt for options interactively if not passed via CLI
+        if not cli_test:
+            test_mode = input("Run in test mode (--test)? [y/N]: ").strip().lower() in ('y', 'yes')
+        if not cli_html:
+            html_mode = input("Generate HTML schedules (--html)? [y/N]: ").strip().lower() in ('y', 'yes')
     else:
         candidate = args.script
         if candidate.suffix == "":
@@ -84,7 +100,15 @@ def main():
                 raise SystemExit(f"Script not found: {candidate}")
         target = candidate.resolve()
 
-    cmd = [sys.executable, str(target)] + args.extra
+    extra_args = []
+    if test_mode:
+        extra_args.append("--test")
+    if html_mode:
+        extra_args.append("--html")
+
+    passed_args = [arg for arg in unknown if arg != "--"] + extra_args
+
+    cmd = [sys.executable, str(target)] + passed_args
     print(f"Executing: {' '.join(cmd)}")
     result = subprocess.run(cmd)
     sys.exit(result.returncode)
