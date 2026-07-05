@@ -6,6 +6,8 @@ import signal
 import json
 import subprocess
 import os
+import tempfile
+import shlex
 
 from datetime import datetime
 from pathlib import Path
@@ -16,10 +18,9 @@ from tabulate import tabulate
 import webbrowser
 import sys
 from pysat.pb import PBEnc, EncType
-from pysat.examples.rc2 import RC2
 from pysat.formula import WCNF
 import csv
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 # Global variables
 time_list = []
@@ -49,8 +50,140 @@ DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "Output" / Path(__file__).stem
 OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
 DATA_DIR = PROJECT_ROOT / "presedent_graph"
 POWER_DIR = PROJECT_ROOT / "official_task_power"
+MAXHS_BIN = Path(os.environ.get("MAXHS_BIN", "/home/lucifong/MaxHS/build/release/bin/maxhs"))
 var_map = {}
 var_counter = 0
+
+def to_wsl_path(path: Path) -> str:
+    """Convert a Windows path to WSL (/mnt/drive/...) form."""
+    resolved = path.resolve()
+    if resolved.drive:
+        drive = resolved.drive.rstrip(":").lower()
+        rest = resolved.as_posix().split(":", 1)[-1]
+        if rest.startswith("/"):
+            rest = rest[1:]
+        return f"/mnt/{drive}/{rest}"
+    return resolved.as_posix()
+
+def write_wcnf_file(wcnf: WCNF, hard_clauses: List, soft_clauses: List, var_count: int, filename: str = "problem.wcnf") -> None:
+    """Write WCNF file with hard (top_weight prefix) and soft clauses with weights."""
+    total_clauses = len(hard_clauses) + len(soft_clauses)
+    top_weight = max((item[1] for item in soft_clauses), default=0) + 1
+    
+    with open(filename, 'w') as f:
+        f.write(f"p wcnf {var_count} {total_clauses} {top_weight}\n")
+        
+        # Write hard constraints with top_weight prefix
+        for clause in hard_clauses:
+            f.write(f"{top_weight} ")
+            f.write(" ".join(map(str, clause)))
+            f.write(" 0\n")
+        
+        # Write soft constraints with their weights
+        for clause, weight in soft_clauses:
+            f.write(f"{weight} ")
+            f.write(" ".join(map(str, clause)))
+            f.write(" 0\n")
+
+def parse_maxhs_solution(output: str) -> Optional[List[int]]:
+    """Parse MaxHS output to extract model.
+    
+    Handles:
+    - 'v <binary_string>' (e.g., 'v 10101...')
+    - 'v <lit1> <lit2> ... 0' (space-separated)
+    """
+    lines = output.strip().split('\n')
+    for line in lines:
+        if line.startswith('v '):
+            var_string = line[2:].strip()
+            
+            # Check if it's a binary string (all 0s and 1s)
+            if var_string and all(c in '01' for c in var_string):
+                # Convert binary string to variable assignments
+                assignment = []
+                for i, bit in enumerate(var_string):
+                    if bit == '1':
+                        assignment.append(i + 1)  # Variables are 1-indexed
+                    else:
+                        assignment.append(-(i + 1))
+                return assignment
+            else:
+                # Handle space-separated format
+                try:
+                    assignment = [int(x) for x in var_string.split() if x != '0']
+                    if assignment:
+                        return assignment
+                except ValueError:
+                    pass
+    
+    return None
+
+def solve_with_maxhs(wcnf: WCNF, hard_clauses: List, soft_clauses: List, var_count: int, maxhs_bin: Path = MAXHS_BIN) -> Optional[List[int]]:
+    """Run MaxHS on WCNF problem and return the model if found.
+    
+    Writes WCNF file, calls MaxHS with -printSoln, parses model.
+    """
+    bin_path = Path(maxhs_bin)
+    host_is_wsl = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
+    use_wsl_bridge = (os.name == 'nt' and str(bin_path).startswith('/'))
+    
+    if not host_is_wsl and not use_wsl_bridge and not bin_path.exists():
+        raise FileNotFoundError(f"MaxHS binary not found at: {bin_path}")
+    
+    # Write WCNF file
+    wcnf_filename = "problem.wcnf"
+    write_wcnf_file(wcnf, hard_clauses, soft_clauses, var_count, wcnf_filename)
+    print(f"Wrote {len(hard_clauses)} hard and {len(soft_clauses)} soft clauses to {wcnf_filename}")
+    
+    try:
+        if use_wsl_bridge:
+            # Run via WSL
+            wsl_wcnf = to_wsl_path(Path(wcnf_filename).resolve())
+            cmd = [
+                "wsl",
+                "bash",
+                "-lc",
+                f"{shlex.quote(bin_path.as_posix())} -printSoln {shlex.quote(wsl_wcnf)}"
+            ]
+        else:
+            cmd = [bin_path.as_posix(), "-printSoln", wcnf_filename]
+        
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+            check=False,
+        )
+        
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        return_code = result.returncode
+        
+        print(f"MaxHS exit code: {return_code}")
+        
+        # Parse model from stdout
+        model = parse_maxhs_solution(stdout)
+        
+        if not model:
+            print("MaxHS did not return a valid model")
+            print(f"stdout:\n{stdout}")
+            if stderr:
+                print(f"stderr:\n{stderr}")
+        else:
+            print(f"MaxHS returned model with {len(model)} variables")
+        
+        return model
+    
+    except subprocess.TimeoutExpired:
+        print("MaxHS timeout")
+        return None
+    finally:
+        try:
+            Path(wcnf_filename).unlink()
+        except Exception:
+            pass
 
 def flush_summary():
     """Write summary rows replacing any existing entry with the same key."""
@@ -249,7 +382,6 @@ def set_var(value, name, *args):
             var_counter += 1
             var_map[key] = var_counter
     return var_map[key]
-
 
 def build_base_formula():
     """Build CNF for feasibility (all constraints except peak minimization)."""
@@ -601,12 +733,12 @@ def add_inagural(solver, peak):
     return solver
 
 class WCNFWrapper:
-    def __init__(self, wcnf):
-        self.wcnf = wcnf
+    def __init__(self, clause_list):
+        self.clause_list = clause_list
     def add_clause(self, clause):
-        self.wcnf.append(clause)
+        self.clause_list.append(clause)
     def nof_clauses(self):
-        return len(self.wcnf.hard)
+        return len(self.clause_list)
 
 def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     print("run single instance")
@@ -671,42 +803,44 @@ def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
     best_model = model
     best_peak = first_peak
     
-    wcnf = WCNF()
-    # Add base hard clauses
-    for cl in base_clauses:
-        wcnf.append(cl)
-        
-    # Add peak constraints (hard) + soft clauses for minimization
-    # Use first_peak as the upper bound for the ladder encoding
-    wrapper = WCNFWrapper(wcnf)
+    # Collect hard and soft clauses separately for MaxHS
+    hard_clauses = list(base_clauses)  # Base formulation clauses
+    soft_clauses = []  # Will add soft clauses for peak minimization
+    
+    # Add peak constraints (hard) and soft clauses via add_inagural
+    wrapper = WCNFWrapper(hard_clauses)
     add_inagural(wrapper, first_peak)
     
-    # Soft clauses: minimize sum(U)
+    # Soft clauses: minimize sum(U) with weight 1 each
     for u in U:
-        wcnf.append([-u], weight=1)
+        soft_clauses.append(([-u], 1))
         
-    print(f"WCNF: {len(wcnf.hard)} hard, {len(wcnf.soft)} soft")
+    print(f"Hard clauses: {len(hard_clauses)}, Soft clauses: {len(soft_clauses)}")
+
+    maxhs_model = solve_with_maxhs(None, hard_clauses, soft_clauses, var_counter)
+    final_status = "OPTIMAL"
     
-    with RC2(wcnf) as rc2:
-        model = rc2.compute()
-        if model:
-            best_model = model
-            size = max(var_counter, max(abs(l) for l in model))
-            best_peak, _ = compute_peak(decode_model(model, size), horizon)
-            print(f"MaxSAT found peak: {best_peak}")
-        else:
-            print("MaxSAT failed to find a model (should not happen if feasible)")
+    if maxhs_model:
+        best_model = maxhs_model
+        size = max(var_counter, max(abs(l) for l in maxhs_model))
+        best_peak, _ = compute_peak(decode_model(maxhs_model, size), horizon)
+        print(f"MaxSAT found peak: {best_peak}")
+        final_status = "OPTIMAL"
+    else:
+        print("MaxHS failed to find a model (timeout or error)")
+        print(f"Keeping feasible solution with peak: {best_peak}")
+        final_status = "TIMEOUT_MAXSAT"
 
     runtime = time.time() - t_start
-    print(f"Best peak: {best_peak} | runtime: {runtime:.3f}s")
+    print(f"Best peak: {best_peak} | runtime: {runtime:.3f}s | status: {final_status}")
     print(summarize_solution(best_model, horizon))
     outfile = write_html_schedule(name, m, c, r_max, R_max, best_model, horizon, best_peak, runtime)
     if outfile:
         print(f"HTML schedule written to {outfile}")
 
-    # Final OPTIMAL snapshot (or best found)
+    # Final snapshot
     add_summary_row(
-        status="OPTIMAL",
+        status=final_status,
         peak=best_peak,
         attempts=1,
         runtime_sec=runtime,

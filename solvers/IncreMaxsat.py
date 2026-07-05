@@ -1,0 +1,988 @@
+from math import inf
+import math
+import re
+import time
+import signal
+import json
+import subprocess
+import os
+import tempfile
+import shlex
+
+from datetime import datetime
+from pathlib import Path
+
+from pysat.solvers import Cadical195
+import fileinput
+from tabulate import tabulate
+import webbrowser
+import sys
+from pysat.pb import PBEnc, EncType
+from pysat.formula import WCNF
+import csv
+from typing import List, Dict, Any, Optional
+
+# Global variables
+time_list = []
+adj = []
+neighbors = [[0 for _ in range(1000)] for _ in range(1000)]
+reversed_neighbors = [[0 for _ in range(1000)] for _ in range(1000)]
+X = []
+A = []
+S = []
+R = []
+W = []
+best_model = None
+best_peak = None
+name = ""
+m = 0
+c = 0
+r_max = 0
+R_max = 0
+n = 0
+summary_rows: List[Dict[str, Any]] = []
+SCRIPT_NAME = Path(__file__).name
+# Use absolute POSIX path for self-invocation under WSL
+SCRIPT_PATH = Path(__file__).resolve().as_posix()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Default to consolidated Output/{solver_name}
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "Output" / Path(__file__).stem
+OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
+DATA_DIR = PROJECT_ROOT / "presedent_graph"
+POWER_DIR = PROJECT_ROOT / "official_task_power"
+MAXHS_BIN = Path(os.environ.get("MAXHS_BIN", "/home/lucifong/MaxHS/build/release/bin/maxhs"))
+var_map = {}
+var_counter = 0
+
+def to_wsl_path(path: Path) -> str:
+    """Convert a Windows path to WSL (/mnt/drive/...) form."""
+    resolved = path.resolve()
+    if resolved.drive:
+        drive = resolved.drive.rstrip(":").lower()
+        rest = resolved.as_posix().split(":", 1)[-1]
+        if rest.startswith("/"):
+            rest = rest[1:]
+        return f"/mnt/{drive}/{rest}"
+    return resolved.as_posix()
+
+def write_wcnf_file(wcnf: WCNF, hard_clauses: List, soft_clauses: List, var_count: int, filename: str = "problem.wcnf") -> None:
+    """Write WCNF file with hard (top_weight prefix) and soft clauses with weights."""
+    total_clauses = len(hard_clauses) + len(soft_clauses)
+    top_weight = max((item[1] for item in soft_clauses), default=0) + 1
+    
+    with open(filename, 'w') as f:
+        f.write(f"p wcnf {var_count} {total_clauses} {top_weight}\n")
+        
+        # Write hard constraints with top_weight prefix
+        for clause in hard_clauses:
+            f.write(f"{top_weight} ")
+            f.write(" ".join(map(str, clause)))
+            f.write(" 0\n")
+        
+        # Write soft constraints with their weights
+        for clause, weight in soft_clauses:
+            f.write(f"{weight} ")
+            f.write(" ".join(map(str, clause)))
+            f.write(" 0\n")
+
+def parse_maxhs_solution(output: str) -> Optional[List[int]]:
+    """Parse MaxHS output to extract model.
+    
+    Handles:
+    - 'v <binary_string>' (e.g., 'v 10101...')
+    - 'v <lit1> <lit2> ... 0' (space-separated)
+    """
+    lines = output.strip().split('\n')
+    for line in lines:
+        if line.startswith('v '):
+            var_string = line[2:].strip()
+            
+            # Check if it's a binary string (all 0s and 1s)
+            if var_string and all(c in '01' for c in var_string):
+                # Convert binary string to variable assignments
+                assignment = []
+                for i, bit in enumerate(var_string):
+                    if bit == '1':
+                        assignment.append(i + 1)  # Variables are 1-indexed
+                    else:
+                        assignment.append(-(i + 1))
+                return assignment
+            else:
+                # Handle space-separated format
+                try:
+                    assignment = [int(x) for x in var_string.split() if x != '0']
+                    if assignment:
+                        return assignment
+                except ValueError:
+                    pass
+    
+    return None
+
+def solve_with_maxhs(wcnf: WCNF, hard_clauses: List, soft_clauses: List, var_count: int, maxhs_bin: Path = MAXHS_BIN) -> Optional[List[int]]:
+    """Run MaxHS on WCNF problem and return the model if found.
+    
+    Writes WCNF file, calls MaxHS with -printSoln, parses model.
+    """
+    bin_path = Path(maxhs_bin)
+    host_is_wsl = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
+    use_wsl_bridge = (os.name == 'nt' and str(bin_path).startswith('/'))
+    
+    if not host_is_wsl and not use_wsl_bridge and not bin_path.exists():
+        raise FileNotFoundError(f"MaxHS binary not found at: {bin_path}")
+    
+    # Write WCNF file
+    wcnf_filename = "problem.wcnf"
+    write_wcnf_file(wcnf, hard_clauses, soft_clauses, var_count, wcnf_filename)
+    print(f"Wrote {len(hard_clauses)} hard and {len(soft_clauses)} soft clauses to {wcnf_filename}")
+    
+    try:
+        if use_wsl_bridge:
+            # Run via WSL
+            wsl_wcnf = to_wsl_path(Path(wcnf_filename).resolve())
+            cmd = [
+                "wsl",
+                "bash",
+                "-lc",
+                f"{shlex.quote(bin_path.as_posix())} -printSoln {shlex.quote(wsl_wcnf)}"
+            ]
+        else:
+            cmd = [bin_path.as_posix(), "-printSoln", wcnf_filename]
+        
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+            check=False,
+        )
+        
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        return_code = result.returncode
+        
+        print(f"MaxHS exit code: {return_code}")
+        
+        # Parse model from stdout
+        model = parse_maxhs_solution(stdout)
+        
+        if not model:
+            print("MaxHS did not return a valid model")
+            print(f"stdout:\n{stdout}")
+            if stderr:
+                print(f"stderr:\n{stderr}")
+        else:
+            print(f"MaxHS returned model with {len(model)} variables")
+        
+        return model
+    
+    except subprocess.TimeoutExpired:
+        print("MaxHS timeout")
+        return None
+    finally:
+        try:
+            Path(wcnf_filename).unlink()
+        except Exception:
+            pass
+
+def flush_summary():
+    """Write summary rows replacing any existing entry with the same key."""
+    if not summary_rows:
+        return
+
+    def key(row: Dict[str, Any]):
+        return (
+            str(row["name"]),
+            str(row["n"]),
+            str(row["m"]),
+            str(row["c"]),
+            str(row["r_max"]),
+            str(row["R_max"]),
+        )
+
+    out_dir = OUTPUT_ROOT
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = out_dir / "summary.csv"
+
+    existing: List[Dict[str, Any]] = []
+    if csv_path.exists():
+        with csv_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                existing.append(row)
+
+    # Replace entries with the same key (keep latest)
+    merged_map: Dict[tuple, Dict[str, Any]] = {}
+    for row in existing:
+        merged_map[key(row)] = row
+    for row in summary_rows:
+        merged_map[key(row)] = row
+
+    merged = list(merged_map.values())
+    if not merged:
+        return
+
+    fieldnames = list(merged[0].keys())
+    with csv_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(merged)
+
+    # XLSX if pandas available
+    try:
+        import pandas as pd  # type: ignore
+
+        df = pd.DataFrame(merged)
+        xlsx_path = out_dir / "summary.xlsx"
+        df.to_excel(xlsx_path, index=False)
+    except Exception:
+        pass
+
+    summary_rows.clear()
+
+def add_summary_row(status: str, peak: Any, attempts: int, runtime_sec: float, base_vars: int, base_clause_count: int):
+    """Append a summary row and flush it to disk."""
+    summary_rows.append(
+        {
+            "name": name,
+            "n": n,
+            "m": m,
+            "c": c,
+            "r_max": r_max,
+            "R_max": R_max,
+            "base_vars": base_vars,
+            "base_clauses": base_clause_count,
+            "peak": peak,
+            "attempts": attempts,
+            "runtime_sec": round(runtime_sec, 3),
+            "status": status,
+        }
+    )
+    flush_summary()
+
+data_set = [
+    # Easy families 
+    # MERTENS 
+    ["MERTENS", 6, 6],      # 0
+    ["MERTENS", 2, 18],     # 1
+
+    # BOWMAN
+    ["BOWMAN", 5, 20],      # 2
+
+    # JAESCHKE
+    ["JAESCHKE", 8, 6],     # 3
+    ["JAESCHKE", 3, 18],    # 4
+
+    # JACKSON
+    ["JACKSON", 8, 7],      # 5
+    ["JACKSON", 3, 21],     # 6
+
+    # MANSOOR
+    ["MANSOOR", 4, 48],     # 7
+    ["MANSOOR", 2, 94],     # 8
+
+    # MITCHELL
+    ["MITCHELL", 8, 14],    # 9
+    ["MITCHELL", 3, 39],    # 10
+
+    # ROSZIEG
+    ["ROSZIEG", 10, 14],    # 11
+    ["ROSZIEG", 4, 32],     # 12
+
+    # Hard families
+    # BUXEY
+    ["BUXEY", 14, 25],      # 13
+    ["BUXEY", 7, 47],       # 14
+
+    # SAWYER
+    ["SAWYER", 14, 25],     # 15
+    ["SAWYER", 7, 47],      # 16
+]
+
+def refresh_globals():
+    global time_list, adj, neighbors, reversed_neighbors, W, X, S, A, R, n, m, c, r_max, R_max, var_map, var_counter, best_model, best_peak
+    time_list = []
+    adj = []
+    neighbors = [[0 for _ in range(1000)] for _ in range(1000)]
+    reversed_neighbors = [[0 for _ in range(1000)] for _ in range(1000)]
+    W = []
+    X = []
+    S = []
+    A = []
+    R = []
+    var_counter = 0
+    var_map = {}
+    
+
+def read_input(name):
+    cnt = 0
+    global n, time_list, adj, neighbors, reversed_neighbors
+    input_path = DATA_DIR / f"{name}.IN2"
+    with input_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                if cnt == 0:
+                    n = int(line)
+                elif cnt <= n: 
+                    time_list.append(int(line))
+                else:
+                    line = line.split(",")
+                    if(line[0] != "-1" and line[1] != "-1"):
+                        adj.append([int(line[0])-1, int(line[1])-1])
+                        neighbors[int(line[0])-1][int(line[1])-1] = 1
+                        reversed_neighbors[int(line[1])-1][int(line[0])-1] = 1
+                    else:
+                        break
+                cnt = cnt + 1
+
+def load_power(name):
+    """Read task power values for the given instance name."""
+    global W
+    power_path = POWER_DIR / f"{name}.txt"
+    with power_path.open("r", encoding="utf-8") as f:
+        W = [int(line.strip()) for line in f if line.strip()]
+
+def max_var_id():
+    """Return the current maximum variable id from X/S/A/R."""
+    vals = []
+    for mat in (X, S, A, R):
+        if mat:
+            vals.append(max(max(row) for row in mat))
+    return max(vals) if vals else 0
+
+def generate_vars():
+    global X, S, A, R, n, m, c, r_max
+    X = [[j*m+i+1 for i in range (m)] for j in range(n)]
+    S = [[m*n + j*c*r_max + i + 1 for i in range (c*r_max)] for j in range(n)]
+    A = [[m*n + r_max*c*n + j*c*r_max + i + 1 for i in range (c*r_max)] for j in range(n)]
+    R = [[m*n + r_max*c*n + c*r_max*n + k*r_max + i + 1 for i in range (r_max)] for k in range(m)]
+
+def get_key(value):
+    for key, val in var_map:
+        if (val == value):
+            return key
+
+def get_var(name, *args):
+    global var_counter
+    key = (name,) + args
+    if key not in var_map:
+        var_counter += 1
+        var_map[key] = var_counter
+    return var_map[key]
+
+def set_var(value, name, *args):
+    """Set a variable in the global var_map."""
+    key = (name,) + args
+    if value is not None:
+        var_map[key] = value
+    else:
+        if key not in var_map:
+            global var_counter
+            var_counter += 1
+            var_map[key] = var_counter
+    return var_map[key]
+
+def build_base_formula():
+    """Build CNF for feasibility (all constraints except peak minimization)."""
+    global var_counter
+    horizon = c * r_max
+    solver = Cadical195()
+    var_counter = max_var_id()
+    print("var_counter:", var_counter)
+    base_clauses = []
+
+    def emit(clause):
+        base_clauses.append(clause)
+        solver.add_clause(clause)
+
+    # # Quick infeasibility: if any task longer than horizon, force UNSAT.
+    # for task_id, duration in enumerate(time_list):
+    #     if duration > horizon:
+    #         emit([1, -1])
+    #         return solver, var_counter, horizon, base_clauses
+
+    valid_starts = []
+
+    # # (C1) ALO cho X
+    # for j in range(n):
+    #     emit([X[j][k] for k in range(m)])
+
+    # # (C2) AMO cho X
+    # for j in range(n):
+    #     for k1 in range(m):
+    #         for k2 in range(k1 + 1, m):
+    #             emit([-X[j][k1], -X[j][k2]])
+
+    # # (C3) ALO cho S và (C4) AMO cho S
+    for j, tj in enumerate(time_list):
+        latest_start = horizon - tj
+        starts = [t for t in range(latest_start + 1)]
+        valid_starts.append(starts)
+        # emit([S[j][t] for t in starts])
+        # for t1 in range(len(starts)):
+        #     for t2 in range(t1 + 1, len(starts)):
+        #         emit([-S[j][starts[t1]], -S[j][starts[t2]]])
+
+    # (C1 + C2) Staircase encoding cho X va S
+    for j in range(n):
+        set_var(X[j][0],"Y",j,0)
+        for k in range(1,m-1):
+            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])
+            emit([-X[j][k], get_var("Y", j, k)])
+            emit([-X[j][k], -get_var("Y", j, k-1)])
+            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])
+        # Last machine
+        emit([get_var("Y", j, m-2), X[j][m-1]])
+        emit([-get_var("Y", j, m-2), -X[j][m-1]])  
+    print("After var: ", var_counter)
+    
+    # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    for i, j in adj:
+        for k in range(m-1):
+            emit([-get_var("Y",j,k), -X[i][k+1]])
+
+    # T[j][t] represents "task j starts at time t or earlier"
+    for j in range(n):
+        last_t = horizon-time_list[j]
+        
+        # Special case: Full cycle tasks (only one feasible start time: t=0)
+        if last_t == 0:
+            # Force the task to start at t=0 (equivalent to original constraint #4)
+            emit([S[j][0]])
+        else:
+            # First time slot
+            set_var(S[j][0], "T", j, 0)
+            
+            # Intermediate time slots
+            for t in range(1, last_t):
+                emit([-get_var("T", j, t-1), get_var("T", j, t)]) # T[j][t-1] -> T[j][t]
+                emit([-S[j][t], get_var("T", j, t)]) # S[j][t] -> T[j][t]
+                emit([-S[j][t], -get_var("T", j, t-1)]) # S[j][t] -> ¬T[j][t-1]
+                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)]) # T[j][t] -> (T[j][t-1] ∨ S[j][t])
+            
+            # Last time slot (ensures at least one start time)
+            emit([get_var("T", j, last_t-1), S[j][last_t]])
+            emit([-get_var("T", j, last_t-1), -S[j][last_t]])
+
+
+    # (C5) Nếu khởi động thì phải đang chạy đủ tj bước
+    for j, tj in enumerate(time_list):
+        for t in valid_starts[j]:
+            for eps in range(tj):
+                if t + eps < horizon:
+                    emit([-S[j][t], A[j][t + eps]])
+
+    # (C6) Không chồng lấn trên cùng máy
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            for k in range(m):
+                for t in range(horizon):
+                    emit([-X[i][k], -X[j][k], -A[i][t], -A[j][t]])
+
+    # # (C7) Nếu i ≺ j thì j không thể ở trạm sớm hơn i
+    # for i, j in adj:
+    #     for k in range(m):
+    #         for h in range(k + 1, m):
+    #             emit([-X[j][k], -X[i][h]])
+
+    # (C8) Trong cùng máy thì i không được bắt đầu sau j
+    # for i, j in adj:
+    #     for k in range(m):
+    #         for t1 in valid_starts[i]:
+    #             for t2 in valid_starts[j]:
+    #                 if t1 > t2:
+    #                     emit([-X[i][k], -X[j][k], -S[i][t1], -S[j][t2]])
+
+
+    for i,j in adj:
+        for k in range(m):
+
+            left_bound = time_list[i] - 1
+            right_bound = horizon - time_list[j]
+            emit([-X[i][k], -X[j][k], -get_var("T", j, left_bound)])
+            for t in range (left_bound + 1, right_bound):
+                t_i = t - time_list[i]+1
+                emit([-X[i][k], -X[j][k], -get_var("T", j, t), -S[i][t_i]])
+            for t in range (max(0,right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
+                emit([-X[i][k], -X[j][k], -S[i][t], -get_var("T",j,horizon-time_list[j]-1)])
+
+    # (C9) Nếu dùng tài nguyên r+1 thì phải dùng r
+    for k in range(m):
+        for r in range(r_max - 1):
+            emit([-R[k][r + 1], R[k][r]])
+
+    # (C10) Liên hệ cửa sổ khởi động với số tài nguyên máy
+    for j, tj in enumerate(time_list):
+        for k in range(m):
+            for t in valid_starts[j]:
+                q = math.ceil((t + tj) / c)
+                if q <= r_max:
+                    emit([-S[j][t], -X[j][k], R[k][q - 1]])
+                else:
+                    emit([-S[j][t], -X[j][k]])
+
+    # (C11) Ngân sách tài nguyên toàn tuyến
+    lits = []
+    weights = []
+    for k in range(m):
+        for r in range(r_max):
+            lits.append(R[k][r])
+            weights.append(1)
+    enc = PBEnc.leq(lits=lits, weights=weights, bound=R_max, top_id=var_counter, encoding=EncType.binmerge)
+    for cl in enc.clauses:
+        emit(cl)
+    var_counter = max(var_counter, enc.nv)
+
+
+    return solver, var_counter, horizon, base_clauses
+
+def decode_model(model, size):
+    """Convert model list to boolean array indexed by var id."""
+    assign = [False] * (size + 1)
+    for lit in model:
+        if lit > 0 and lit <= size:
+            assign[lit] = True
+    return assign
+
+def decode_resources(model):
+    """Return list of resource counts per machine from model assignment."""
+    size = max(max_var_id(), max(abs(l) for l in model))
+    assign = decode_model(model, size)
+    res_counts = []
+    for k in range(m):
+        used = 0
+        for r in range(r_max):
+            if assign[R[k][r]]:
+                used = r + 1  # r is 0-based but represents resource r+1
+        res_counts.append(used)
+    return res_counts
+
+def compute_peak(assign, horizon):
+    """Compute peak load per real-time phase."""
+    loads = [0 for _ in range(c)]
+    for j in range(n):
+        wj = W[j] if j < len(W) else 0
+        for t in range(horizon):
+            if assign[A[j][t]]:
+                tau = t % c
+                loads[tau] += wj
+    peak = max(loads) if loads else 0
+    return peak, loads
+
+
+def summarize_solution(model, horizon):
+    if model is None:
+        return "UNSAT"
+    size = max(max_var_id(), max(abs(l) for l in model))
+    assign = decode_model(model, size)
+    rows = []
+    for j in range(n):
+        machine = next((k for k in range(m) if assign[X[j][k]]), -1)
+        start_time = next((t for t in range(horizon) if assign[S[j][t]]), -1)
+        rows.append((j, machine, start_time))
+    lines = [f"task {j+1}: machine {machine+1 if machine>=0 else '?'} start {start}" for j, machine, start in rows]
+    return "\n".join(lines)
+
+def build_schedule(model, horizon):
+    """Return (table, starts) from model; table[machine][time] = task_id+1 or 0."""
+    size = max(max_var_id(), max(abs(l) for l in model))
+    assign = decode_model(model, size)
+    table = [[0 for _ in range(horizon)] for _ in range(m)]
+    starts = []
+    for j in range(n):
+        machine = next((k for k in range(m) if assign[X[j][k]]), -1)
+        start_time = next((t for t in range(horizon) if assign[S[j][t]]), -1)
+        starts.append((j, machine, start_time))
+        if machine >= 0 and start_time >= 0:
+            for t in range(start_time, min(start_time + time_list[j], horizon)):
+                table[machine][t] = j + 1
+    return table, starts
+
+def build_compact_table(model, horizon):
+    """Return per-machine resource rows (r_max rows, c cols) derived from starts."""
+    size = max(max_var_id(), max(abs(l) for l in model))
+    assign = decode_model(model, size)
+    tables = []
+    for k in range(m):
+        machine_rows = [[0 for _ in range(c)] for _ in range(r_max)]
+        for j in range(n):
+            if not assign[X[j][k]]:
+                continue
+            start_time = next((t for t in range(horizon) if assign[S[j][t]]), -1)
+            if start_time < 0:
+                continue
+            duration = time_list[j]
+            for off in range(duration):
+                t_abs = start_time + off
+                row = t_abs // c
+                col = t_abs % c
+                if 0 <= row < r_max:
+                    machine_rows[row][col] = j + 1
+        tables.append(machine_rows)
+    return tables
+
+def write_html_schedule(instance_name, m_val, c_val, r_max_val, R_max_val, model, horizon, peak, runtime_sec):
+    """Write an HTML table for the schedule to OUTPUT_ROOT/<instance>_mX_cY/rX_RY/."""
+    if model is None:
+        return None
+    _, starts = build_schedule(model, horizon)
+    compact = build_compact_table(model, horizon)
+    res_counts = decode_resources(model)
+
+    out_dir = OUTPUT_ROOT / f"{instance_name}_n{n}_m{m_val}_c{c_val}" / f"r{r_max_val}_R{R_max_val}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outfile = out_dir / f"{instance_name}_n{n}_m{m_val}_c{c_val}_r{r_max_val}_R{R_max_val}.html"
+    if outfile.exists():
+        outfile.unlink()
+
+    header_cells = "".join([f"<th>t{t}</th>" for t in range(c)])
+    rows_html = []
+    for k in range(m):
+        rows_html.append(f"<tr class='machine'><th colspan='{c+1}'>Machine {k+1} (r={res_counts[k]})</th></tr>")
+        rows_html.append(f"<tr><th></th>{header_cells}</tr>")
+        for r in range(r_max):
+            cells = "".join([f"<td>{compact[k][r][t] if compact[k][r][t] else ''}</td>" for t in range(c)])
+            rows_html.append(f"<tr><th>Res {r+1}</th>{cells}</tr>")
+
+    starts_text = "<br>".join(
+        [f"Task {j+1}: machine {mach+1 if mach>=0 else '?'} start {st}" for j, mach, st in starts]
+    )
+    resources_text = "<br>".join([f"Machine {k+1}: {res_counts[k]} resources" for k in range(m)])
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+table {{ border-collapse: collapse; font-family: Arial, sans-serif; }}
+th, td {{ border: 1px solid #aaa; padding: 4px 6px; text-align: center; }}
+th {{ background: #f0f0f0; position: sticky; top: 0; }}
+.meta {{ margin-bottom: 10px; font-family: Arial, sans-serif; }}
+.machine th {{ background: #dfe8ff; }}
+</style>
+</head>
+<body>
+<div class="meta">
+<strong>Instance:</strong> {instance_name} &nbsp; 
+<strong>m:</strong> {m_val} &nbsp;
+<strong>c:</strong> {c_val} &nbsp;
+<strong>r_max:</strong> {r_max_val} &nbsp; 
+<strong>R_max:</strong> {R_max_val} &nbsp; 
+<strong>Peak:</strong> {peak if peak is not None else 'NA'} &nbsp;
+<strong>Runtime:</strong> {runtime_sec:.3f}s<br>
+<strong>Resources per machine:</strong><br>
+{resources_text}<br>
+<strong>Starts:</strong><br>
+{starts_text}
+</div>
+<table>
+<tr><th>Machine/Time</th>{header_cells}</tr>
+{''.join(rows_html)}
+</table>
+</body>
+</html>
+"""
+
+    outfile.write_text(html, encoding="utf-8")
+    return outfile
+
+def add_inagural(solver, peak):
+    """Add INAGURAL constraints to the solver."""
+    global var_counter, U, r_max, c, W, A, n, R_max
+    horizon = c * r_max
+    LB = max(W)
+    UB = peak
+    U = []
+
+    # Ladder vars for bounds LB+1 .. UB-1 
+    for _ in range(LB + 1, UB):
+        U.append(var_counter + 1)
+        var_counter += 1
+    
+    for i in range(1, len(U)):
+        solver.add_clause([-U[i], U[i-1]])
+
+    top_id = var_counter + 1
+    for t in range(c):
+        lits = []
+        weights = []
+        for u in U:
+            lits.append(-u)
+            weights.append(1)
+        for i in range(n):
+           lits.append(A[i][t])
+           weights.append(W[i])
+
+        if r_max >= 2:
+            for i in range(n):
+                lits.append(A[i][t+c])
+                weights.append(W[i])
+        if r_max >= 3:
+            for i in range(n):
+                lits.append(A[i][t+2*c])
+                weights.append(W[i])
+        
+        enc = PBEnc.leq(lits=lits, weights=weights, bound=UB, top_id=top_id, encoding=EncType.binmerge)
+
+        if enc.nv > var_counter:
+            var_counter = enc.nv
+            top_id = var_counter + 1
+        for cl in enc.clauses:
+            solver.add_clause(cl)
+    return solver
+
+class WCNFWrapper:
+    def __init__(self, clause_list):
+        self.clause_list = clause_list
+    def add_clause(self, clause):
+        self.clause_list.append(clause)
+    def nof_clauses(self):
+        return len(self.clause_list)
+
+def run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param):
+    print("run single instance - IncreMaxsat (Incremental 10 rounds then MaxSAT)")
+    global name, m, c, r_max, R_max, X, S, A, R, best_model, best_peak, U
+    name = name_param
+    m = m_param
+    c = c_param
+    r_max = r_max_param
+    R_max = R_max_param
+    best_model = None
+    best_peak = None
+    
+    refresh_globals()
+    read_input(name)
+    load_power(name)
+    generate_vars()
+    print("IncreMaxsat Solver: Incremental (max 10 rounds) + MaxSAT")
+    print(f"Solving {name} with m={m}, c={c}, r_max={r_max}, R_max={R_max}")
+    t_start = time.time()
+    solver, var_counter, horizon, base_clauses = build_base_formula()
+    base_clause_count = len(base_clauses)
+
+    add_summary_row(
+        status="STARTED",
+        peak="",
+        attempts=0,
+        runtime_sec=0.0,
+        base_vars=var_counter,
+        base_clause_count=base_clause_count,
+    )
+
+    # Initial solve for feasibility
+    if not solver.solve():
+        runtime = time.time() - t_start
+        print("UNSAT or timed out")
+        add_summary_row(
+            status="TIMEOUT_INFEASIBLE",
+            peak="",
+            attempts=0,
+            runtime_sec=runtime,
+            base_vars=var_counter,
+            base_clause_count=base_clause_count,
+        )
+        return
+
+    model = solver.get_model()
+    size = max(var_counter, max(abs(l) for l in model))
+    first_peak, _ = compute_peak(decode_model(model, size), horizon)
+    runtime_first = time.time() - t_start
+
+    # Flush FEASIBLE immediately
+    add_summary_row(
+        status="FEASIBLE",
+        peak=first_peak,
+        attempts=0,
+        runtime_sec=runtime_first,
+        base_vars=var_counter,
+        base_clause_count=base_clause_count,
+    )
+
+    # Phase 1: Incremental optimization (max 10 iterations)
+    print("Phase 1: Incremental optimization (max 10 rounds)")
+    best_model = model
+    best_peak = first_peak
+    solver = add_inagural(solver, best_peak)
+    
+    attempts = 0
+    MAX_INCREMENTAL_ROUNDS = 10
+    LB = max(W)
+    incremental_optimal = False
+    
+    while attempts < MAX_INCREMENTAL_ROUNDS:
+        attempts += 1
+        print(f"Incremental round {attempts}/{MAX_INCREMENTAL_ROUNDS}")
+        
+        if not solver.solve():
+            print(f"Incremental optimization completed after {attempts} rounds (no more improvement)")
+            incremental_optimal = True
+            break
+
+        model = solver.get_model()
+        runtime_intermediate = time.time() - t_start
+        size = max(var_counter, max(abs(l) for l in model))
+        peak_found, _ = compute_peak(decode_model(model, size), horizon)
+        
+        # Flush INTERMEDIATE snapshot
+        add_summary_row(
+            status="INCREMENTAL",
+            peak=peak_found,
+            attempts=attempts,
+            runtime_sec=runtime_intermediate,
+            base_vars=var_counter,
+            base_clause_count=base_clause_count,
+        )
+        
+        outfile = write_html_schedule(
+            name, m, c, r_max, R_max, model, horizon, peak_found, runtime_intermediate
+        )
+        if outfile:
+            print(f"HTML schedule (incremental round {attempts}) written to {outfile}")
+            
+        best_model = model
+        best_peak = peak_found
+        idx = best_peak - LB - 1
+        print(f"Incremental round {attempts}: New best peak = {best_peak}")
+        
+        if idx <= 0 or idx > len(U):
+            print("Reached optimal bound in incremental phase")
+            incremental_optimal = True
+            break
+            
+        solver.add_clause([-U[idx - 1]])  # Exclude previous peak candidate
+
+    # Phase 2: MaxSAT if not optimal from incremental
+    maxsat_timeout = False
+    if not incremental_optimal:
+        print(f"\nPhase 2: MaxSAT optimization (after {attempts} incremental rounds)")
+        print(f"Starting MaxSAT with peak bound = {best_peak}")
+        
+        # Collect hard and soft clauses separately for MaxHS
+        hard_clauses = list(base_clauses)  # Base formulation clauses
+        soft_clauses = []  # Will add soft clauses for peak minimization
+        
+        # Add peak constraints (hard) and soft clauses via add_inagural
+        wrapper = WCNFWrapper(hard_clauses)
+        add_inagural(wrapper, best_peak)
+        
+        # Soft clauses: minimize sum(U) with weight 1 each
+        for u in U:
+            soft_clauses.append(([-u], 1))
+            
+        print(f"Hard clauses: {len(hard_clauses)}, Soft clauses: {len(soft_clauses)}")
+
+        maxhs_model = solve_with_maxhs(None, hard_clauses, soft_clauses, var_counter)
+        if maxhs_model:
+            best_model = maxhs_model
+            size = max(var_counter, max(abs(l) for l in maxhs_model))
+            maxsat_peak, _ = compute_peak(decode_model(maxhs_model, size), horizon)
+            
+            if maxsat_peak < best_peak:
+                best_peak = maxsat_peak
+                print(f"MaxSAT improved: peak = {best_peak}")
+            else:
+                print(f"MaxSAT found: peak = {maxsat_peak} (no improvement)")
+        else:
+            print("MaxHS failed (timeout or error)")
+            print(f"Keeping best incremental solution with peak: {best_peak}")
+            maxsat_timeout = True
+
+    runtime = time.time() - t_start
+    
+    # Determine final status
+    if incremental_optimal:
+        final_status = "OPTIMAL"
+    elif maxsat_timeout:
+        final_status = "TIMEOUT_MAXSAT"
+    else:
+        final_status = "MAXSAT_COMPLETED"
+    
+    print(f"\nFinal result: peak = {best_peak} | runtime: {runtime:.3f}s | status: {final_status}")
+    print(summarize_solution(best_model, horizon))
+    outfile = write_html_schedule(name, m, c, r_max, R_max, best_model, horizon, best_peak, runtime)
+    if outfile:
+        print(f"HTML schedule written to {outfile}")
+
+    # Final snapshot
+    add_summary_row(
+        status=final_status,
+        peak=best_peak,
+        attempts=attempts,
+        runtime_sec=runtime,
+        base_vars=var_counter,
+        base_clause_count=base_clause_count,
+    )
+
+
+if __name__ == "__main__":
+    # Detect if running in WSL
+    is_wsl = os.path.exists('/proc/version') and 'microsoft' in open('/proc/version').read().lower()
+    
+    if len(sys.argv) == 1:
+        print("Run all tests")
+        TIMEOUT = 3600
+        completed_runs = set()
+        summary_csv = OUTPUT_ROOT / "summary.csv"
+        if summary_csv.exists():
+            with summary_csv.open("r", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    completed_runs.add(
+                        (
+                            str(row.get("name", "")),
+                            str(row.get("m", "")),
+                            str(row.get("c", "")),
+                            str(row.get("r_max", "")),
+                            str(row.get("R_max", "")),
+                        )
+                    )
+
+        for instance_id in range(0, len(data_set)):
+            instance = data_set[instance_id]
+            name = instance[0]
+            m = instance[1]
+            c = instance[2]
+
+            for r_max in range(1,4):
+                for R_max in range(m, r_max * m + 1):
+                    if is_wsl:
+                        # Already in WSL, run directly using absolute script path
+                        command = (
+                            f"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}"
+                        )
+                    else:
+                        # On Windows, call WSL, quoting absolute script path
+                        command = (
+                            "wsl bash -c \"cd /mnt/c/Users/admin/Documents/Python/P3SAML3P && "
+                            f"./runlim -r {TIMEOUT} .venv_wsl/bin/python '{SCRIPT_PATH}' {instance_id} {r_max} {R_max}\""
+                        )
+
+                    try:
+                        key = (str(name), str(m), str(c), str(r_max), str(R_max))
+                        if key in completed_runs:
+                            print(f"Skipping instance {instance} {r_max} {R_max} (already in summary.csv)")
+                            continue
+                        completed_runs.add(key)
+
+                        print(f"Running instance {instance} {r_max} {R_max}")
+                        process = subprocess.Popen(command, shell=True)
+                        process.wait()
+                        time.sleep(1)
+
+                        result = None
+
+                    except Exception as e:
+                        print(f"Error running instance {instance} {r_max} {R_max}: {str(e)}")
+    
+    else:
+        instance_id = int(sys.argv[1])
+        r_max_param = int(sys.argv[2])
+        R_max_param = int(sys.argv[3])
+
+        instance = data_set[instance_id]
+        name_param = instance[0]
+        m_param = instance[1]
+        c_param = instance[2]
+
+        run_single_instance(name_param, m_param, c_param, r_max_param, R_max_param)

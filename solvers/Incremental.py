@@ -125,6 +125,7 @@ def add_summary_row(status: str, peak: Any, attempts: int, runtime_sec: float, b
     )
     flush_summary()
 
+# data set contain instance_name, m, c
 data_set = [
     # Easy families 
     # MERTENS 
@@ -163,7 +164,11 @@ data_set = [
     ["SAWYER", 14, 25],     # 15
     ["SAWYER", 7, 47],      # 16
 ]
-
+# test set contain instance_name, m, c, r_max, R_max
+test_set = [
+    ["MANSOOR", 4, 48, 3, 5],     # 0
+    ["MANSOOR", 4, 48, 2, 6],     # 1
+]
 def refresh_globals():
     global time_list, adj, neighbors, reversed_neighbors, W, X, S, A, R, n, m, c, r_max, R_max, var_map, var_counter, best_model, best_peak
     time_list = []
