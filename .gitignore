@@ -153,3 +153,4 @@ Output/
 !requirements.txt
 *.pdf
 *.aux
+.ssh

@@ -270,15 +270,47 @@ def max_var_id():
     vals = []
     for mat in (X, S, A, R):
         if mat:
-            vals.append(max(max(row) for row in mat))
+            row_maxes = [max(row) for row in mat if row]
+            if row_maxes:
+                vals.append(max(row_maxes))
     return max(vals) if vals else 0
 
 def generate_vars():
     global X, S, A, R, n, m, c, r_max
-    X = [[j*m+i+1 for i in range (m)] for j in range(n)]
-    S = [[m*n + j*c*r_max + i + 1 for i in range (c*r_max)] for j in range(n)]
-    A = [[m*n + r_max*c*n + j*c*r_max + i + 1 for i in range (c*r_max)] for j in range(n)]
-    R = [[m*n + r_max*c*n + c*r_max*n + k*r_max + i + 1 for i in range (r_max)] for k in range(m)]
+    horizon = c * r_max
+    next_var = 1
+
+    X = []
+    for _ in range(n):
+        row = list(range(next_var, next_var + m))
+        X.append(row)
+        next_var += m
+
+    S = []
+    for tj in time_list:
+        latest_start = horizon - tj
+        count = max(0, latest_start + 1)
+        row = list(range(next_var, next_var + count))
+        S.append(row)
+        next_var += count
+
+    A = []
+    for _ in range(n):
+        row = list(range(next_var, next_var + horizon))
+        A.append(row)
+        next_var += horizon
+
+    R = []
+    for _ in range(m):
+        row = list(range(next_var, next_var + r_max))
+        R.append(row)
+        next_var += r_max
+
+def start_times(j):
+    return range(len(S[j]))
+
+def first_true_start(assign, j):
+    return next((t for t in start_times(j) if assign[S[j][t]]), -1)
 
 def get_key(value):
     for key, val in var_map:
@@ -338,10 +370,8 @@ def build_base_formula():
     #             emit([-X[j][k1], -X[j][k2]])
 
     # (C3) ALO for S and (C4) AMO for S
-    for j, tj in enumerate(time_list):
-        latest_start = horizon - tj
-        starts = [t for t in range(latest_start + 1)]
-        valid_starts.append(starts)
+    for j in range(n):
+        valid_starts.append(list(start_times(j)))
         # emit([S[j][t] for t in starts])
         # for t1 in range(len(starts)):
         #     for t2 in range(t1 + 1, len(starts)):
@@ -367,7 +397,11 @@ def build_base_formula():
 
     # T[j][t] represents "task j starts at time t or earlier"
     for j in range(n):
-        last_t = horizon-time_list[j]
+        last_t = len(S[j]) - 1
+
+        if last_t < 0:
+            emit([])
+            continue
         
         # Special case: Full cycle tasks (only one feasible start time: t=0)
         if last_t == 0:
@@ -440,10 +474,8 @@ def build_base_formula():
         for k in range(m):
             for t in valid_starts[j]:
                 q = math.ceil((t + tj) / c)
-                if q <= r_max:
-                    emit([-S[j][t], -X[j][k], R[k][q - 1]])
-                else:
-                    emit([-S[j][t], -X[j][k]])
+                assert 1 <= q <= r_max
+                emit([-S[j][t], -X[j][k], R[k][q - 1]])
 
     # (C11) Resource budget of the entire line
     lits = []
@@ -502,7 +534,7 @@ def summarize_solution(model, horizon):
     rows = []
     for j in range(n):
         machine = next((k for k in range(m) if assign[X[j][k]]), -1)
-        start_time = next((t for t in range(horizon) if assign[S[j][t]]), -1)
+        start_time = first_true_start(assign, j)
         rows.append((j, machine, start_time))
     lines = [f"task {j+1}: machine {machine+1 if machine>=0 else '?'} start {start}" for j, machine, start in rows]
     return "\n".join(lines)
@@ -515,7 +547,7 @@ def build_schedule(model, horizon):
     starts = []
     for j in range(n):
         machine = next((k for k in range(m) if assign[X[j][k]]), -1)
-        start_time = next((t for t in range(horizon) if assign[S[j][t]]), -1)
+        start_time = first_true_start(assign, j)
         starts.append((j, machine, start_time))
         if machine >= 0 and start_time >= 0:
             for t in range(start_time, min(start_time + time_list[j], horizon)):
@@ -532,7 +564,7 @@ def build_compact_table(model, horizon):
         for j in range(n):
             if not assign[X[j][k]]:
                 continue
-            start_time = next((t for t in range(horizon) if assign[S[j][t]]), -1)
+            start_time = first_true_start(assign, j)
             if start_time < 0:
                 continue
             duration = time_list[j]

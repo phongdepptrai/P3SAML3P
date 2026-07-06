@@ -18,18 +18,23 @@ if use_wsl:
     WINDOWS_OUTPUT = "/mnt/c/Users/admin/Documents/Python/P3SAML3P/Output/CPLEX_msls"
 
     sync_cmd = (
-        "rsync -a --exclude='.venv*' --exclude='Output/' "
+        "rsync -rt --delete "
+        "--exclude='.venv*' --exclude='Output/' --exclude='.git/' "
+        "--exclude='.codex/' --exclude='__pycache__/' "
         f"/mnt/c/Users/admin/Documents/Python/P3SAML3P/ {WSL_ROOT}/"
     )
-    run_cmd = f"export OUTPUT_ROOT='{WINDOWS_OUTPUT}' && cd '{WSL_ROOT}' && '{VENV_PY}' '{SCRIPT}'"
+    run_cmd = f"export OUTPUT_ROOT='{WINDOWS_OUTPUT}'; cd '{WSL_ROOT}'; '{VENV_PY}' '{SCRIPT}'"
     if len(sys.argv) > 1:
         args = " ".join(shlex.quote(arg) for arg in sys.argv[1:])
         run_cmd += f" {args}"
 
-    bash_cmd = f"{sync_cmd} && {run_cmd}"
-    wsl_command = ["wsl", "bash", "-c", bash_cmd]
-    print(f"Running in WSL: {bash_cmd}", flush=True)
-    result = subprocess.run(wsl_command)
+    print(f"Syncing project to WSL: {sync_cmd}", flush=True)
+    sync_result = subprocess.run(["wsl", "bash", "-lc", sync_cmd])
+    if sync_result.returncode != 0:
+        sys.exit(sync_result.returncode)
+
+    print(f"Running in WSL: {run_cmd}", flush=True)
+    result = subprocess.run(["wsl", "bash", "-lc", run_cmd])
     sys.exit(result.returncode)
 else:
     SCRIPT = ROOT / "solvers" / "CPLEX_msls.py"

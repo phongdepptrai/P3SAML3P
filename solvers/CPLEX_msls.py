@@ -125,6 +125,8 @@ class DecoderContext:
 
 SUMMARY_ROWS: List[Dict[str, Any]] = []
 
+DEFAULT_MS_TIME_LIMIT = 600.0
+
 
 def read_input(instance_name: str) -> Tuple[int, List[int], List[Tuple[int, int]]]:
     input_path = DATA_DIR / f"{instance_name}.IN2"
@@ -904,6 +906,12 @@ def resolve_runs(args: argparse.Namespace) -> List[Tuple[int, str, int, int, int
 
 
 def run_one(instance: Instance, args: argparse.Namespace, seed: Optional[int], replication: int) -> Solution:
+    print(
+        f"Starting MSLS {instance.name}: n={instance.n} m={instance.m} c={instance.c} "
+        f"r_max={instance.r_max} R_max={instance.R_max} seed={seed} "
+        f"replication={replication} time_limit={args.ms_time_limit}s",
+        flush=True,
+    )
     result = msxlspsc(
         instance,
         global_time_limit=args.ms_time_limit,
@@ -918,7 +926,8 @@ def run_one(instance: Instance, args: argparse.Namespace, seed: Optional[int], r
     print(
         f"MSLS {instance.name}: peak={result.solution.peak} feasible={result.solution.feasible} "
         f"penalized={result.solution.penalized_value} starts={result.starts_count} "
-        f"exact_calls={result.stats.exact_decoder_calls} runtime={result.runtime_sec:.3f}s"
+        f"exact_calls={result.stats.exact_decoder_calls} runtime={result.runtime_sec:.3f}s",
+        flush=True,
     )
     return result.solution
 
@@ -928,7 +937,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("instance_id", nargs="?", type=int)
     parser.add_argument("r_max", nargs="?", type=int)
     parser.add_argument("R_max", nargs="?", type=int)
-    parser.add_argument("--ms-time-limit", type=float, default=600.0)
+    parser.add_argument("--ms-time-limit", type=float, default=DEFAULT_MS_TIME_LIMIT)
     parser.add_argument("--decoder-time-limit", type=float, default=60.0)
     parser.add_argument("--extra-decoder-time-limit", type=float, default=10.0)
     parser.add_argument("--seed", type=int, default=0)
