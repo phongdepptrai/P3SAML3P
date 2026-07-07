@@ -149,8 +149,9 @@ Thumbs.db
 
 # Project specific
 Output/
-*.txt
+
 !requirements.txt
 *.pdf
 *.aux
 .ssh
+IBM_ILOG_CPLEX_OptStdv22.2_LIN.bin
