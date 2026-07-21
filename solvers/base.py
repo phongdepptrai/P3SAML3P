@@ -44,6 +44,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Default to consolidated Output/{solver_name}
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "Output" / Path(__file__).stem
 OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
+BATCH_R_MAX_LIMIT = 2  # Batch mode r_max cap for testing.
 DATA_DIR = PROJECT_ROOT / "presedent_graph"
 POWER_DIR = PROJECT_ROOT / "official_task_power"
 WRITE_HTML = False  # Set to True via --write-html flag to enable HTML schedule output
@@ -170,6 +171,8 @@ test_data_set = [
     ["MITCHELL", 8, 14, 3, 12],
     ["BUXEY", 14, 25, 1, 14],
     ["SAWYER", 14, 25, 2, 20],
+    ["GUNTHER", 8, 57, 2, 12],
+    ["HESKIA", 8, 141, 2, 12],
 ]
 
 
@@ -656,7 +659,7 @@ if __name__ == "__main__":
         sys.argv = [a for a in sys.argv if a != "--test"]
     if len(sys.argv) == 1:
         print("Run all tests")
-        TIMEOUT = 600
+        TIMEOUT = 3600
         completed_runs = set()
         summary_csv = OUTPUT_ROOT / "summary.csv"
         if summary_csv.exists():
@@ -681,7 +684,7 @@ if __name__ == "__main__":
                 name = instance[0]
                 m = instance[1]
                 c = instance[2]
-                for r_max in range(1, 4):
+                for r_max in range(1, BATCH_R_MAX_LIMIT + 1):
                     for R_max in range(m, r_max * m + 1):
                         runs.append((instance_id, name, m, c, r_max, R_max))
 

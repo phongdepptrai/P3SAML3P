@@ -45,7 +45,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Default to consolidated Output/{solver_name}
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "Output" / Path(__file__).stem
 OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
-BATCH_R_MAX_LIMIT = 2  # Batch mode r_max cap for testing.
 DATA_DIR = PROJECT_ROOT / "presedent_graph"
 POWER_DIR = PROJECT_ROOT / "official_task_power"
 var_map = {}
@@ -195,22 +194,33 @@ def refresh_globals():
     
 
 def compute_transitive_closure():
-    """Compute transitive closure of the precedence graph (E*)."""
+    """Compute 1-depth transitive extension (E_Shorten) of the precedence graph."""
     global adj, neighbors, reversed_neighbors
-    # Floyd-Warshall reachability
-    for k in range(n):
-        for i in range(n):
-            for j in range(n):
-                if i != j and neighbors[i][k] and neighbors[k][j]:
-                    neighbors[i][j] = 1
-                    reversed_neighbors[j][i] = 1
+    
+    # We want to find new edges that represent paths of length exactly 2
+    # without adding paths of length > 2.
+    new_edges = []
+    for i in range(n):
+        for j in range(n):
+            if i != j and not neighbors[i][j]:
+                # Check if there is some k such that i -> k -> j
+                for k in range(n):
+                    if neighbors[i][k] and neighbors[k][j]:
+                        new_edges.append((i, j))
+                        break
 
-    # Rebuild adj list representing E*
+    # Add the discovered depth-2 edges to the neighbors matrix
+    for i, j in new_edges:
+        neighbors[i][j] = 1
+        reversed_neighbors[j][i] = 1
+
+    # Rebuild adj list representing direct + depth-2 edges
     adj.clear()
     for i in range(n):
         for j in range(n):
             if neighbors[i][j]:
                 adj.append([i, j])
+
 
 def read_input(name):
     cnt = 0
@@ -330,150 +340,88 @@ def build_base_formula():
 
     valid_starts = []
 
-    # (C3+C4) Calculate valid_starts for each task (ALO/AMO S uses staircase below)
+    # (C3) ALO for S and (C4) AMO for S
     for j in range(n):
         valid_starts.append(list(start_times(j)))
 
-    # (C1+C2) Staircase encoding for X: ALO + AMO using auxiliary variable Y[j][k]
-    # Y[j][k] = true  ⟺  task j is assigned to station k or lower
+    # (C1 + C2) Staircase encoding for X and S
     for j in range(n):
-        set_var(X[j][0], "Y", j, 0)
-        for k in range(1, m - 1):
-            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])   # Y[j][k-1] → Y[j][k]
-            emit([-X[j][k], get_var("Y", j, k)])                 # X[j][k] → Y[j][k]
-            emit([-X[j][k], -get_var("Y", j, k-1)])              # X[j][k] → ¬Y[j][k-1]
-            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])  # Y[j][k] → Y[j][k-1] ∨ X[j][k]
+        set_var(X[j][0],"Y",j,0)
+        for k in range(1,m-1):
+            emit([-get_var("Y", j, k-1), get_var("Y", j, k)])
+            emit([-X[j][k], get_var("Y", j, k)])
+            emit([-X[j][k], -get_var("Y", j, k-1)])
+            emit([X[j][k], get_var("Y", j, k-1), -get_var("Y", j, k)])
         # Last machine
         emit([get_var("Y", j, m-2), X[j][m-1]])
-        emit([-get_var("Y", j, m-2), -X[j][m-1]])
+        emit([-get_var("Y", j, m-2), -X[j][m-1]])  
     print("After var: ", var_counter)
-
-    # (C7) Precedence → machine order: if i ≺ j, then j cannot be at an earlier station than i
-    # Y[j][k] → ¬X[i][k+1]  ⟺  ¬Y[j][k] ∨ ¬X[i][k+1]
+    
+    # (C7) If i ≺ j, then j cannot be at an earlier station than i
     for i, j in adj:
-        for k in range(m - 1):
-            emit([-get_var("Y", j, k), -X[i][k+1]])
+        for k in range(m-1):
+            emit([-get_var("Y",j,k), -X[i][k+1]])
 
-    # (C3+C4) Staircase encoding for S: ALO + AMO using auxiliary variable T[j][t]
-    # T[j][t] = true  ⟺  task j starts at time t or earlier (prefix sum)
+    # T[j][t] represents "task j starts at time t or earlier"
     for j in range(n):
-        last_t = len(S[j]) - 1  # latest valid start time
+        last_t = len(S[j]) - 1
 
         if last_t < 0:
             emit([])
             continue
-
+        
+        # Special case: Full cycle tasks (only one feasible start time: t=0)
         if last_t == 0:
-            # Task takes up the entire horizon → can only start at t=0
+            # Force the task to start at t=0 (equivalent to original constraint #4)
             emit([S[j][0]])
         else:
-            # t=0: T[j][0] ≡ S[j][0]
+            # First time slot
             set_var(S[j][0], "T", j, 0)
-
-            # t=1..last_t-1: intermediate staircase slots
+            
+            # Intermediate time slots
             for t in range(1, last_t):
-                emit([-get_var("T", j, t-1), get_var("T", j, t)])              # T[j][t-1] → T[j][t]
-                emit([-S[j][t], get_var("T", j, t)])                            # S[j][t] → T[j][t]
-                emit([-S[j][t], -get_var("T", j, t-1)])                         # S[j][t] → ¬T[j][t-1]
-                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)])     # T[j][t] → T[j][t-1] ∨ S[j][t]
-
-            # t=last_t: must have at least one start time
+                emit([-get_var("T", j, t-1), get_var("T", j, t)]) # T[j][t-1] -> T[j][t]
+                emit([-S[j][t], get_var("T", j, t)]) # S[j][t] -> T[j][t]
+                emit([-S[j][t], -get_var("T", j, t-1)]) # S[j][t] -> ¬T[j][t-1]
+                emit([S[j][t], get_var("T", j, t-1), -get_var("T", j, t)]) # T[j][t] -> (T[j][t-1] ∨ S[j][t])
+            
+            # Last time slot (ensures at least one start time)
             emit([get_var("T", j, last_t-1), S[j][last_t]])
             emit([-get_var("T", j, last_t-1), -S[j][last_t]])
 
 
-    # (C5) Continuity: S[j][t] → A[j][t], A[j][t+1], ..., A[j][t+tj-1]
-    # If task j starts at t, it must run for the next tj steps
+    # (C5) If started, it must run for tj steps
     for j, tj in enumerate(time_list):
         for t in valid_starts[j]:
             for eps in range(tj):
                 if t + eps < horizon:
                     emit([-S[j][t], A[j][t + eps]])
 
-    # (C6a) Same-machine indicator — definition of SM[i][j]:
-    # (X[i][k] ∧ X[j][k]) → SM[i][j]  ⟺  ¬X[i][k] ∨ ¬X[j][k] ∨ SM[i][j]
-    # If both i and j are assigned to station k, then SM[i][j] = true
-    for k in range(m):
-        for i in range(n - 1):
-            for j in range(i + 1, n):
-                emit([-X[i][k], -X[j][k], get_var("SM", i, j)])
-
-    # (C6b) Same-machine indicator — negation of SM[i][j] when on different stations:
-    # (X[i][k] ∧ X[j][l]) → ¬SM[i][j]  (k ≠ l)  ⟺  ¬X[i][k] ∨ ¬X[j][l] ∨ ¬SM[i][j]
-    # If i and j are on different stations, then SM[i][j] = false
+    # (C6) No overlap on the same machine
     for i in range(n - 1):
         for j in range(i + 1, n):
             for k in range(m):
-                for l in range(m):
-                    if k == l:
-                        continue
-                    emit([-X[i][k], -X[j][l], -get_var("SM", i, j)])
+                for t in range(horizon):
+                    emit([-X[i][k], -X[j][k], -A[i][t], -A[j][t]])
 
-    # (C6c) Non-overlap on the same station — using SM and staircase T:
-    # Direction 1 (constraining j based on the start time of i):
-    #   SM[i][j] ∧ S[i][t] → T[j][t - t_j] ∨ ¬T[j][t + t_i - 1]
-    #   Meaning: if on the same station and i starts at t, then j must finish before t (T[j][t-tj])
-    #            or j must start after i finishes (¬T[j][t+ti-1])
-    # Direction 2 (symmetric — constraining i based on the start time of j):
-    #   SM[i][j] ∧ S[j][t] → T[i][t - t_i] ∨ ¬T[i][t + t_j - 1]
-    for i in range(n - 1):
-        for j in range(i + 1, n):
-            last_j = horizon - time_list[j]  # maximum valid T index for task j
-            last_i = horizon - time_list[i]  # maximum valid T index for task i
-
-            # Direction 1: constrain j based on start of i
-            for t in start_times(i):
-                max_t_j = last_j - 1
-                clause = [-get_var("SM", i, j), -S[i][t]]
-                t_left = t - time_list[j]          # j finishes before t if T[j][t_left] = true
-                if 0 <= t_left <= max_t_j:
-                    clause.append(get_var("T", j, t_left))
-                t_right = t + time_list[i] - 1    # j starts after i finishes if ¬T[j][t_right]
-                if 0 <= t_right <= max_t_j:
-                    clause.append(-get_var("T", j, t_right))
-                emit(clause)
-
-            # Direction 2: constrain i based on start of j (symmetric)
-            for t in start_times(j):
-                max_t_i = last_i - 1
-                clause = [-get_var("SM", i, j), -S[j][t]]
-                t_left = t - time_list[i]          # i finishes before t if T[i][t_left] = true
-                if 0 <= t_left <= max_t_i:
-                    clause.append(get_var("T", i, t_left))
-                t_right = t + time_list[j] - 1    # i starts after j finishes if ¬T[i][t_right]
-                if 0 <= t_right <= max_t_i:
-                    clause.append(-get_var("T", i, t_right))
-                emit(clause)
-
-    # (C8) Precedence → time order: if i ≺ j and on the same station k, then i must finish before j starts
-    # Use staircase T to encode: ¬X[i][k] ∨ ¬X[j][k] ∨ ¬T[j][t] ∨ ¬S[i][t_i]
-    # with t_i = t - t_i + 1 being the corresponding start time of i to finish at t
-    for i, j in adj:
+    for i,j in adj:
         for k in range(m):
-            left_bound = time_list[i] - 1           # j cannot start before t_i steps
-            right_bound = horizon - time_list[j]    # right bound of T[j]
 
-            # T[j][left_bound] must be false (j cannot start at this position yet)
+            left_bound = time_list[i] - 1
+            right_bound = horizon - time_list[j]
             emit([-X[i][k], -X[j][k], -get_var("T", j, left_bound)])
-
-            # For t from left_bound+1 to right_bound-1
-            for t in range(left_bound + 1, right_bound):
-                t_i = t - time_list[i] + 1          # start of i to finish at t
+            for t in range (left_bound + 1, right_bound):
+                t_i = t - time_list[i]+1
                 emit([-X[i][k], -X[j][k], -get_var("T", j, t), -S[i][t_i]])
-
-            # T[j] reached the end: constrain S[i] not to start too late
-            for t in range(max(0, right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
+            for t in range (max(0,right_bound - time_list[i] + 1), horizon - time_list[i] + 1):
                 emit([-X[i][k], -X[j][k], -S[i][t]])
 
-    # (C9) Resource monotonicity: R[k][r+1] → R[k][r]
-    # If station k uses the (r+1)-th resource, then it must have used the r-th resource
+    # (C9) If resource r+1 is used, then r must be used
     for k in range(m):
         for r in range(r_max - 1):
             emit([-R[k][r + 1], R[k][r]])
 
-    # (C10) Relation of start window to machine resources:
-    # S[j][t] ∧ X[j][k] → R[k][q-1]  with q = ⌈(t + t_j) / c⌉
-    # If task j starts at t on station k, then station k must have at least q resources
+    # (C10) Relate start window to machine resources
     for j, tj in enumerate(time_list):
         for k in range(m):
             for t in valid_starts[j]:
@@ -481,7 +429,7 @@ def build_base_formula():
                 assert 1 <= q <= r_max
                 emit([-S[j][t], -X[j][k], R[k][q - 1]])
 
-    # (C11) Line-wide resource budget: Σ R[k][r] ≤ R_max
+    # (C11) Resource budget of the entire line
     lits = []
     weights = []
     for k in range(m):
@@ -835,7 +783,7 @@ if __name__ == "__main__":
         sys.argv = [a for a in sys.argv if a != "--test"]
     if len(sys.argv) == 1:
         print("Run all tests")
-        TIMEOUT = 3600
+        TIMEOUT = 600
         completed_runs = set()
         summary_csv = OUTPUT_ROOT / "summary.csv"
         if summary_csv.exists():
@@ -860,7 +808,7 @@ if __name__ == "__main__":
                 name = instance[0]
                 m = instance[1]
                 c = instance[2]
-                for r_max in range(1, BATCH_R_MAX_LIMIT + 1):
+                for r_max in range(1, 4):
                     for R_max in range(m, r_max * m + 1):
                         runs.append((instance_id, name, m, c, r_max, R_max))
 

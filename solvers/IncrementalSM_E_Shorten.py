@@ -195,17 +195,27 @@ def refresh_globals():
     
 
 def compute_transitive_closure():
-    """Compute transitive closure of the precedence graph (E*)."""
+    """Compute 1-depth transitive extension (E_Shorten) of the precedence graph."""
     global adj, neighbors, reversed_neighbors
-    # Floyd-Warshall reachability
-    for k in range(n):
-        for i in range(n):
-            for j in range(n):
-                if i != j and neighbors[i][k] and neighbors[k][j]:
-                    neighbors[i][j] = 1
-                    reversed_neighbors[j][i] = 1
+    
+    # We want to find new edges that represent paths of length exactly 2
+    # without adding paths of length > 2.
+    new_edges = []
+    for i in range(n):
+        for j in range(n):
+            if i != j and not neighbors[i][j]:
+                # Check if there is some k such that i -> k -> j
+                for k in range(n):
+                    if neighbors[i][k] and neighbors[k][j]:
+                        new_edges.append((i, j))
+                        break
 
-    # Rebuild adj list representing E*
+    # Add the discovered depth-2 edges to the neighbors matrix
+    for i, j in new_edges:
+        neighbors[i][j] = 1
+        reversed_neighbors[j][i] = 1
+
+    # Rebuild adj list representing direct + depth-2 edges
     adj.clear()
     for i in range(n):
         for j in range(n):

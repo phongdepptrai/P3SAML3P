@@ -126,6 +126,7 @@ class DecoderContext:
 SUMMARY_ROWS: List[Dict[str, Any]] = []
 
 DEFAULT_MS_TIME_LIMIT = 600.0
+BATCH_R_MAX_LIMIT = 2  # Batch mode r_max cap for testing.
 
 
 def read_input(instance_name: str) -> Tuple[int, List[int], List[Tuple[int, int]]]:
@@ -899,7 +900,7 @@ def resolve_runs(args: argparse.Namespace) -> List[Tuple[int, str, int, int, int
             runs.append((instance_id, row[0], row[1], row[2], row[3], row[4]))
     else:
         for instance_id, row in enumerate(DATA_SET):
-            for r_max in range(1, 4):
+            for r_max in range(1, BATCH_R_MAX_LIMIT + 1):
                 for R_max in range(row[1], r_max * row[1] + 1):
                     runs.append((instance_id, row[0], row[1], row[2], r_max, R_max))
     return runs

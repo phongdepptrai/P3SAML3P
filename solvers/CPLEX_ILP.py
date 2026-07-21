@@ -39,7 +39,8 @@ OUTPUT_ROOT = Path(os.environ.get("OUTPUT_ROOT", str(DEFAULT_OUTPUT_ROOT)))
 DATA_DIR = PROJECT_ROOT / "presedent_graph"
 POWER_DIR = PROJECT_ROOT / "official_task_power"
 WRITE_HTML = False  # Set to True via --write-html flag
-TIMEOUT = 600  # CPLEX time limit in seconds
+TIMEOUT = 3600  # CPLEX time limit in seconds
+BATCH_R_MAX_LIMIT = 2  # Batch mode r_max cap. Increase here when r_max=3 is needed.
 
 
 # ─── Summary CSV I/O ────────────────────────────────────────────────────────
@@ -170,6 +171,8 @@ test_data_set = [
     ["MITCHELL", 8, 14, 3, 12],
     ["BUXEY", 14, 25, 1, 14],
     ["SAWYER", 14, 25, 2, 20],
+    ["GUNTHER", 8, 57, 2, 12],
+    ["HESKIA", 8, 141, 2, 12],
 ]
 
 
@@ -611,6 +614,8 @@ if __name__ == "__main__":
         if summary_csv.exists():
             with summary_csv.open("r", encoding="utf-8") as f:
                 for row in csv.DictReader(f):
+                    if row.get("status") in {"STARTED", "INTERMEDIATE"}:
+                        continue
                     completed_runs.add(
                         (
                             str(row.get("name", "")),
@@ -631,7 +636,7 @@ if __name__ == "__main__":
                 inst_name = instance[0]
                 inst_m = instance[1]
                 inst_c = instance[2]
-                for inst_r_max in range(1, 4):
+                for inst_r_max in range(1, BATCH_R_MAX_LIMIT + 1):
                     for inst_R_max in range(inst_m, inst_r_max * inst_m + 1):
                         runs.append((instance_id, inst_name, inst_m, inst_c,
                                      inst_r_max, inst_R_max))

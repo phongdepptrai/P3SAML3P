@@ -82,3 +82,4 @@ To also write the HTML schedule:
 ```bash
 python runners/CPLEX_msls_run.py 0 3 10 --test --ms-time-limit 600 --seed 42 --html
 ```
+tmux -S /home/lucifong/P3SAML3P/.tmux/ok.sock attach -t ok
